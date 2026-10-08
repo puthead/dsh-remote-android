@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DSH 远程</string>
+    <string name="notification_channel_name">任务连接</string>
+    <string name="notification_channel_desc">保持与 PC 网关的事件流连接</string>
+    <string name="notification_title">DSH 远程已连接</string>
+</resources>

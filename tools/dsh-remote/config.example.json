@@ -1,0 +1,55 @@
+{
+  "_readme": [
+    "dsh-remote 网关配置模板：复制为 config.json 后按需修改。",
+    "本文件绝不写入任何真实密钥：API Key 只放在 dshHome 下的 .credentials.yaml（单行 DEEPSEEK_API_KEY: sk-...）。",
+    "dshHome 同时是凭据目录、任务历史（tasks/）与日志（logs/）的根，并被作为 DSH_HOME 传给 dsh 子进程。",
+    "workspaceAllowlist 为空表示拒绝所有任务（默认拒绝，避免忘记配置导致全盘可写）。"
+  ],
+  "host": "0.0.0.0",
+  "port": 8787,
+  "dshHome": "C:\\Users\\<你的用户名>\\.dsh-remote",
+  "serverName": null,
+  "gatewayVersion": "1.0.0",
+  "authRequired": true,
+  "maxConcurrent": 2,
+  "maxQueue": 100,
+  "defaultTimeoutSec": 3600,
+  "maxTimeoutSec": 86400,
+  "workspaceAllowlist": [
+    "D:\\proj"
+  ],
+  "defaultWorkspace": "D:\\proj",
+  "dsh": {
+    "node": "D:\\DSH\\resources\\runtime\\primary-runtime\\dependencies\\node\\bin\\node.exe",
+    "binPath": "C:\\Users\\<你的用户名>\\.dsh\\profiles\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
+    "profile": "headless",
+    "version": "0.1.0-rc.7",
+    "discoverSessionId": true,
+    "launcherArgs": [],
+    "env": {}
+  },
+  "events": {
+    "bufferSize": 2000,
+    "heartbeatMs": 15000
+  },
+  "limits": {
+    "maxBodyBytes": 1048576,
+    "maxOutputBytes": 1048576,
+    "pairClaimPerMinute": 10,
+    "authFailPerMinute": 30,
+    "pairCodeTtlMs": 300000,
+    "maxSseClients": 16,
+    "requestTimeoutMs": 30000,
+    "headersTimeoutMs": 20000,
+    "outputFlushMs": 200,
+    "outputFlushBytes": 8192
+  },
+  "tasks": {
+    "dirName": "tasks"
+  },
+  "log": {
+    "dirName": "logs",
+    "filePrefix": "gateway",
+    "toConsole": true
+  }
+}

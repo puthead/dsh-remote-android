@@ -1,0 +1,31 @@
+# ---- 构建产物 ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.iml
+*.apk.idsig
+
+# ---- 工具链（体积大，不入库） ----
+.toolchain/
+.acl-recovery/
+
+# ---- 运行时数据（含真实凭据，严禁入库） ----
+.runtime/
+**/.credentials.yaml
+**/config.json
+**/tasks/
+**/logs/
+*.log
+
+# ---- 签名材料：keystore 本体与口令不入库 ----
+keystore/*.jks
+keystore/keystore.properties
+
+# ---- 编辑器/系统 ----
+.vscode/
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/

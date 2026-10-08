@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  内网直连场景需要明文 HTTP：网关监听 0.0.0.0:8787 且默认不带证书。
+  风险：同一局域网内任何人可嗅探/篡改流量，令牌与任务内容都可能被窃取。
+  因此这里只放开明文，不做证书固定、不信任用户自签 CA；跨公网请改用 Tailscale / frp+TLS，
+  或把 baseUrl 换成 https:// 并让网关置于 TLS 反向代理之后（见部署手册）。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

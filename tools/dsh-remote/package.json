@@ -1,0 +1,16 @@
+{
+  "name": "dsh-remote-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 远程任务网关：PC 端零第三方依赖 Node ESM 守护进程（HTTP + SSE + 配对鉴权）",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node gateway.mjs serve",
+    "pair": "node gateway.mjs pair",
+    "devices": "node gateway.mjs devices list",
+    "test": "node --test test/"
+  }
+}
