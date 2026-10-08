@@ -54,13 +54,16 @@ class EventReducerTest {
     @Test
     fun `乱序到达先暂存等空洞补齐`() {
         val reducer = EventReducer()
-        assertTrue(reducer.accept(outputEvent(2, "b")).isEmpty())
+        // 先让 seq=1 落地，建立"已知游标"；此时才谈得上"seq=2 缺失"
+        assertEquals("a", reducer.accept(outputEvent(1, "a")).joinToString("") { it.delta })
+        // seq=3 先到：必须暂存，不能越过 seq=2 直接拼接（否则输出顺序就错了）
+        assertTrue(reducer.accept(outputEvent(3, "c")).isEmpty())
         assertTrue(reducer.hasPendingGap)
-        val applied = reducer.accept(outputEvent(1, "a"))
-        // 补齐 seq=1 后，1 与 2 应一起按序放行
-        assertEquals("ab", applied.joinToString("") { it.delta })
+        val applied = reducer.accept(outputEvent(2, "b"))
+        // seq=2 补齐后，2 与 3 一起按序放行
+        assertEquals("bc", applied.joinToString("") { it.delta })
         assertFalse(reducer.hasPendingGap)
-        assertEquals(2L, reducer.lastAppliedSeq)
+        assertEquals(3L, reducer.lastAppliedSeq)
     }
 
     @Test
@@ -98,6 +101,15 @@ class EventReducerTest {
         )
         assertEquals("hello world", applied.filter { it.type == TaskEventType.TASK_OUTPUT }
             .joinToString("") { it.delta })
+    }
+
+    @Test
+    fun `首个事件不必从 seq 1 开始`() {
+        // 服务端保留窗口之外的旧事件已被丢弃时，客户端拿到的第一个 seq 可能是 5000
+        val reducer = EventReducer()
+        val applied = reducer.acceptAll(listOf(outputEvent(5_000, "x"), outputEvent(5_001, "y")))
+        assertEquals("xy", applied.joinToString("") { it.delta })
+        assertEquals(5_001L, reducer.lastAppliedSeq)
     }
 
     @Test

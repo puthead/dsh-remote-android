@@ -35,6 +35,7 @@ fun DshRemoteRoot(onRequestNotificationPermission: () -> Unit) {
     val repository = Graph.repository
     val settings by repository.settings.collectAsStateWithLifecycle()
     val ready by repository.ready.collectAsStateWithLifecycle()
+    val notice by repository.notice.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // AUTO = 首次启动按"是否已配置"决定；其余值为用户显式导航结果
@@ -81,6 +82,9 @@ fun DshRemoteRoot(onRequestNotificationPermission: () -> Unit) {
             } else {
                 null
             },
+            // 401 清空令牌后 settings 变 null，页面会被强制切回这里，提示必须一起带过来
+            notice = notice,
+            onNoticeDismissed = repository::consumeNotice,
         )
 
         resolved == SCREEN_HOME -> HomeScreen(

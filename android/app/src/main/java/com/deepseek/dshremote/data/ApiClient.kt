@@ -162,13 +162,32 @@ class ApiClient(
             map(text)
         }
 
+    /**
+     * 设备 id 的合法性校验（裁定 A4）。
+     *
+     * 必须是**小写 UUID v4 文本**；不匹配时网关返回 400，因此客户端在本地就挡住，
+     * 避免用历史版本遗留的非法 id 去换令牌。
+     */
+    fun isValidDeviceId(value: String): Boolean = DEVICE_ID_REGEX.matches(value)
+
+    /**
+     * 设备 id 的合法性校验（裁定 A4）。
+     *
+     * 必须是**小写 UUID v4 文本**；不匹配时网关返回 400，因此客户端在本地就挡住，
+     * 避免用历史版本遗留的非法 id 去换令牌。
+     */
     companion object {
+        fun isValidDeviceId(value: String): Boolean = DEVICE_ID_REGEX.matches(value)
+
         private const val TAG = "ApiClient"
         private const val PATH_HEALTH = "/api/v1/health"
         private const val PATH_PAIR_CLAIM = "/api/v1/pair/claim"
         private const val PATH_WORKSPACES = "/api/v1/workspaces"
         private const val PATH_TASKS = "/api/v1/tasks"
         private const val PATH_EVENTS = "/api/v1/events"
+
+        private val DEVICE_ID_REGEX =
+            Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
         private val JSON = "application/json; charset=utf-8".toMediaType()
 

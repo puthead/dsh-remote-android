@@ -93,6 +93,7 @@ class SseForegroundService : Service() {
             is ConnectionState.Connected -> "已连接网关，正在接收任务事件"
             is ConnectionState.Connecting -> "正在连接网关（第 ${state.attempt} 次）"
             is ConnectionState.Retrying -> "连接中断，${state.retryInMs / 1000}s 后重连：${state.reason}"
+            is ConnectionState.Unauthorized -> "设备令牌已失效，请打开应用重新配对"
             is ConnectionState.Failed -> state.reason
             ConnectionState.Idle -> "已停止接收事件"
         }

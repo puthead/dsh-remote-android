@@ -102,6 +102,7 @@ fun ConnectionBanner(state: ConnectionState, modifier: Modifier = Modifier) {
         is ConnectionState.Connecting -> "正在连接网关（第 ${state.attempt} 次）" to Color(0xFF4FA3E3)
         is ConnectionState.Retrying ->
             "连接中断，${(state.retryInMs / 1000).coerceAtLeast(0)}s 后重连：${state.reason}" to Color(0xFFE0A252)
+        is ConnectionState.Unauthorized -> "设备令牌已失效，请重新配对" to Color(0xFFE05B57)
         is ConnectionState.Failed -> "连接失败：${state.reason}" to Color(0xFFE05B57)
         ConnectionState.Idle -> "未连接（保活已停止）" to Color(0xFF8A97A3)
     }

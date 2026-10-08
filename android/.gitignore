@@ -6,3 +6,6 @@ app/build/
 .idea/
 .kotlin/
 captures/
+
+# Signing passwords: never commit. The keystore README stays in git.
+keystore/keystore.properties

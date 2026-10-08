@@ -15,11 +15,13 @@ const argv = process.argv.slice(2);
 const prompt = argv[argv.length - 1] ?? '';
 
 // 记录 argv/cwd/DSH_HOME，供测试断言传递保真性
+// 说明：child 侧 process.argv[1] 即被网关作为 argv[0] 传入的 bin.js，
+// 因此这里额外记录 entry，使「网关实际传了什么 argv」可被完整断言。
 const recordFile = process.env.FAKE_DSH_ARGV_FILE;
 if (recordFile) {
   fs.appendFileSync(
     recordFile,
-    `${JSON.stringify({ argv, prompt, cwd: process.cwd(), dshHome: process.env.DSH_HOME ?? null })}\n`,
+    `${JSON.stringify({ entry: process.argv[1] ?? null, argv, prompt, cwd: process.cwd(), dshHome: process.env.DSH_HOME ?? null })}\n`,
     'utf8',
   );
 }
@@ -91,17 +93,22 @@ if (!script) {
       break;
     }
     case 'big': {
+      // 分块输出带序号的数据流：每块形如 `<0007>xxxx…`，
+      // 这样测试可以精确断言「超限时保留的是尾部而不是头部」。
       const size = script.bytes ?? 1024;
-      const block = 'x'.repeat(4096);
+      const blockSize = script.blockSize ?? 512;
       let written = 0;
+      let index = 0;
       const step = () => {
         if (written >= size) {
           process.exitCode = 0;
           return;
         }
-        const slice = block.slice(0, Math.min(block.length, size - written));
-        process.stdout.write(slice);
-        written += slice.length;
+        const header = `<${String(index).padStart(4, '0')}>`;
+        const body = 'x'.repeat(Math.max(0, Math.min(blockSize, size - written) - header.length));
+        process.stdout.write(header + body);
+        written += header.length + body.length;
+        index++;
         setImmediate(step);
       };
       step();

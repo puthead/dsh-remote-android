@@ -13,24 +13,33 @@ import crypto from 'node:crypto';
 /** Crockford Base32 字母表（ULID 规范），去掉了易混淆的 I/L/O/U。 */
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
+/** 48 位毫秒时间戳上限：10 个 Base32 字符（50 位）能表达的最大安全值。 */
+const MAX_ULID_TIME = 0xffffffffffff;
+
 /**
  * 生成 26 字符 ULID：前 10 位为毫秒时间戳、后 16 位随机。
  * 为什么不用 uuid：ULID 字典序 == 时间序，任务列表按 id 排序即按创建时间排序，
  * 且不依赖第三方库。
  * 80 位随机数按 5 位一组编码成 16 个 Base32 字符（用 BigInt 做位切分，避免位数对不齐）。
+ *
+ * 防御性校验（为什么必须有）：id 是任务的主键，一旦产出 `undefined` 混入的字符串，
+ * 历史记录、SSE 事件、客户端本地库会同时被污染且难以回收。
+ * 因此 ms 非有限正数时一律回退到 Date.now()，并夹紧到 48 位，绝不产出畸形 id。
  * @param {number} [ms] 毫秒时间戳
  * @param {Buffer} [rand] 10 字节随机源（测试可注入以获得确定性）
  * @returns {string}
  */
 export function ulid(ms = Date.now(), rand = crypto.randomBytes(10)) {
-  let t = ms;
+  const numeric = typeof ms === 'number' ? ms : Number.NaN;
+  const safeMs = Number.isFinite(numeric) && numeric > 0 ? Math.min(Math.floor(numeric), MAX_ULID_TIME) : Date.now();
+  let t = safeMs;
   const time = new Array(10);
   for (let i = 9; i >= 0; i--) {
     time[i] = CROCKFORD[t % 32];
     t = Math.floor(t / 32);
   }
   let bits = 0n;
-  for (let i = 0; i < 10; i++) bits = (bits << 8n) | BigInt(rand[i] ?? 0);
+  for (let i = 0; i < 10; i++) bits = (bits << 8n) | BigInt((rand?.[i] ?? 0) & 0xff);
   const tail = new Array(16);
   for (let i = 15; i >= 0; i--) {
     tail[i] = CROCKFORD[Number(bits & 31n)];
@@ -38,6 +47,9 @@ export function ulid(ms = Date.now(), rand = crypto.randomBytes(10)) {
   }
   return time.join('') + tail.join('');
 }
+
+/** ULID 使用的 Base32 字母表，导出以便测试反解时间前缀。 */
+export const ULID_ALPHABET = CROCKFORD;
 
 /** @returns {string} 形如 `task_01J…` 的任务 id */
 export function newTaskId(ms) {
@@ -108,8 +120,25 @@ export function truncateUtf8(text, maxBytes) {
   return text.slice(0, lo);
 }
 
-/** 形如 `sk-xxx` 的 API Key 与 `dshr_xxx` 的网关令牌，绝不允许出现在日志里。 */
-const SECRET_PATTERNS = [
+/**
+ * 按 UTF-8 字节数保留字符串**尾部**，且不切断多字节字符。
+ * 用于输出截断策略（契约 v1.1 A2-5：超限时只保留尾部）。
+ * 起点可能正好落在某个多字节字符的中间，因此跳过前导的延续字节（10xxxxxx）。
+ * @param {string} text
+ * @param {number} maxBytes
+ * @returns {string}
+ */
+export function truncateUtf8Tail(text, maxBytes) {
+  if (maxBytes <= 0) return '';
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.length <= maxBytes) return text;
+  const slice = buf.subarray(buf.length - maxBytes);
+  let start = 0;
+  while (start < slice.length && (slice[start] & 0xc0) === 0x80) start++;
+  return slice.subarray(start).toString('utf8');
+}
+
+/** 形如 `sk-xxx` 的 API Key 与 `dshr_xxx` 的网关令牌，绝不允许出现在日志里。 */const SECRET_PATTERNS = [
   /\b(sk-)[A-Za-z0-9_-]{8,}/g,
   /\b(dshr_)[A-Za-z0-9_-]{8,}/g,
   /\b(Bearer\s+)[A-Za-z0-9._~+/-]{8,}=*/g,

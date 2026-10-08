@@ -15,13 +15,16 @@ object TaskMerger {
      * 1. **状态只进不退**：网关重启或事件重放可能带来旧快照，不能让 `succeeded` 退回 `running`；
      * 2. **输出取更长的那个**：正常情况下服务端对象与本地拼接一致；重连补发前服务端可能更全，
      *    而本地更长时说明收到的是较旧的快照。宁可多留日志也不要丢输出；
-     * 3. **字段缺失不覆盖已有值**：`task.progress` 类事件可能只带部分字段。
+     * 3. **服务端标记 truncated 时以服务端为准**（裁定 A5）：此时服务端只保留尾部 1 MiB，
+     *    长度一定比本地累计短，但它才是网关认可的输出，UI 会明确提示已截断；
+     * 4. **字段缺失不覆盖已有值**：进度类事件可能只带部分字段。
      */
     fun merge(local: RemoteTask?, incoming: RemoteTask): RemoteTask {
         if (local == null) return incoming
+        val preferIncomingOutput = incoming.truncated || incoming.output.length >= local.output.length
         return incoming.copy(
             status = TaskStatus.later(local.status, incoming.status),
-            output = if (incoming.output.length >= local.output.length) incoming.output else local.output,
+            output = if (preferIncomingOutput) incoming.output else local.output,
             title = incoming.title.ifEmpty { local.title },
             prompt = incoming.prompt.ifEmpty { local.prompt },
             workspace = incoming.workspace.ifEmpty { local.workspace },

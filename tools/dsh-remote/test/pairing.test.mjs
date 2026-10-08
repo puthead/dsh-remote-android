@@ -8,7 +8,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DeviceStore, PairingManager, TOKEN_PREFIX, tokenHashOf } from '../lib/tokens.mjs';
-import { httpRequest, makeSandbox, pairDevice, sleep, startHarness } from './helpers.mjs';
+import { findLanIpv4, httpRequest, makeSandbox, pairDevice, sleep, startHarness } from './helpers.mjs';
+
+/** 测试用合法小写 UUID（A2-3 要求 deviceId 必须是小写 UUID）。 */
+const DEVICE_ID = '01234567-89ab-4cde-8f01-23456789abcd';
 
 test('DeviceStore：签发/校验/吊销/同 deviceId 重配对，且只落 sha256', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dshr-tok-'));
@@ -105,7 +108,7 @@ test('HTTP 配对全流程：pair/open → pair/claim → 令牌可用', async (
 
   const claim = await h.request('POST', '/api/v1/pair/claim', {
     token: null,
-    body: { code: open.json.code, deviceName: 'Xiaomi 14', deviceId: 'dev-uuid-1' },
+    body: { code: open.json.code, deviceName: 'Xiaomi 14', deviceId: '11111111-2222-4333-8444-555555555505' },
   });
   assert.equal(claim.status, 200);
   assert.match(claim.json.token, /^dshr_/);
@@ -119,7 +122,7 @@ test('HTTP 配对全流程：pair/open → pair/claim → 令牌可用', async (
   assert.deepEqual(tasks.json, { tasks: [], nextCursor: null });
 
   // 配对码一次性：重复使用 → 403 pairing_closed
-  const reuse = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'x' } });
+  const reuse = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'x', deviceId: DEVICE_ID } });
   assert.equal(reuse.status, 403);
   assert.equal(reuse.json.error.code, 'pairing_closed');
   assert.match(reuse.json.error.message, /配对未开启或配对码已被使用/);
@@ -132,20 +135,20 @@ test('HTTP 配对全流程：pair/open → pair/claim → 令牌可用', async (
 test('HTTP 配对：错误码 401、未开启 403、过期 401、格式非法 400', async (t) => {
   const h = await startHarness(t, {}, { pair: false });
 
-  const closed = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '123456' } });
+  const closed = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '123456', deviceName: 'x', deviceId: DEVICE_ID } });
   assert.equal(closed.status, 403);
   assert.equal(closed.json.error.code, 'pairing_closed');
 
   const open = await h.request('POST', '/api/v1/pair/open', { token: null });
-  const wrong = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '000000' } });
+  const wrong = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '000000', deviceName: 'x', deviceId: DEVICE_ID } });
   assert.equal(wrong.status, 401);
   assert.equal(wrong.json.error.code, 'pairing_bad_code');
 
-  const badFormat = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: 'abc' } });
+  const badFormat = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: 'abc', deviceName: 'x', deviceId: DEVICE_ID } });
   assert.equal(badFormat.status, 400);
   assert.equal(badFormat.json.error.code, 'bad_request');
 
-  const correct = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'ok' } });
+  const correct = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'ok', deviceId: DEVICE_ID } });
   assert.equal(correct.status, 200, '错误尝试不应消费正确的配对码');
 });
 
@@ -153,19 +156,19 @@ test('HTTP 配对：过期码返回 401 pairing_bad_code，随后窗口关闭', 
   const h = await startHarness(t, { limits: { pairCodeTtlMs: 1000 } }, { pair: false });
   const open = await h.request('POST', '/api/v1/pair/open', { token: null });
   await sleep(1100);
-  const expired = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'late' } });
+  const expired = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'late', deviceId: DEVICE_ID } });
   assert.equal(expired.status, 401);
   assert.equal(expired.json.error.code, 'pairing_bad_code');
-  const again = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'late' } });
+  const again = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: open.json.code, deviceName: 'late', deviceId: DEVICE_ID } });
   assert.equal(again.status, 403);
   assert.equal(again.json.error.code, 'pairing_closed');
 });
 
 test('HTTP 限速：pair/claim 每 IP 超限返回 429 rate_limited', async (t) => {
   const h = await startHarness(t, { limits: { pairClaimPerMinute: 2 } }, { pair: false });
-  const first = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '111111' } });
-  const second = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '111111' } });
-  const third = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '111111' } });
+  const first = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '111111', deviceName: 'x', deviceId: DEVICE_ID } });
+  const second = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '111111', deviceName: 'x', deviceId: DEVICE_ID } });
+  const third = await h.request('POST', '/api/v1/pair/claim', { token: null, body: { code: '111111', deviceName: 'x', deviceId: DEVICE_ID } });
   assert.equal(first.status, 403, '未开启配对 → pairing_closed');
   assert.equal(second.status, 403);
   assert.equal(third.status, 429, '第 3 次请求超过 2/min 上限');
@@ -222,8 +225,8 @@ test('HTTP 限速：认证失败每 IP 超限返回 429', async (t) => {
 test('HTTP 设备管理：列表、吊销后令牌立即失效、未知 tokenId 404、同 deviceId 重配对', async (t) => {
   const h = await startHarness(t, {}, { pair: false });
 
-  const firstToken = await pairDevice(h.baseUrl, { deviceName: 'Xiaomi 14', deviceId: 'dev-A' });
-  const secondToken = await pairDevice(h.baseUrl, { deviceName: 'Xiaomi 14', deviceId: 'dev-A' });
+  const firstToken = await pairDevice(h.baseUrl, { deviceName: 'Xiaomi 14', deviceId: '11111111-2222-4333-8444-555555555506' });
+  const secondToken = await pairDevice(h.baseUrl, { deviceName: 'Xiaomi 14', deviceId: '11111111-2222-4333-8444-555555555506' });
   assert.notEqual(firstToken, secondToken);
 
   const oldToken = await h.request('GET', '/api/v1/tasks', { token: firstToken });
@@ -300,4 +303,63 @@ test('错误体形状统一为 { error: { code, message } }', async (t) => {
   const authed = await h.request('GET', '/api/v1/tasks/task_missing');
   assert.equal(authed.status, 404);
   assert.equal(authed.json.error.code, 'not_found');
+});
+
+test('HTTP 配对：deviceId 必须是小写 UUID，否则 400 bad_request（A2-3）', async (t) => {
+  // 本用例会发十余次 claim，放宽限速以免被 10/min 误伤
+  const h = await startHarness(t, { limits: { pairClaimPerMinute: 100 } }, { pair: false });
+  const invalid = [
+    ['大写 UUID', '01234567-89AB-4CDE-8F01-23456789ABCD'],
+    ['缺段', '01234567-89ab-4cde-8f01'],
+    ['非法字符', '01234567-89ab-4cde-8f01-23456789abcg'],
+    ['空串', ''],
+    ['非 UUID 文本', 'device-uuid-0001'],
+    ['多一段', '01234567-89ab-4cde-8f01-23456789abcd-extra'],
+    ['缺字段', undefined],
+    ['非字符串', 12345],
+    ['仅前缀', '01234567-'],
+  ];
+  for (const [label, deviceId] of invalid) {
+    const open = await h.request('POST', '/api/v1/pair/open', { token: null });
+    const body = { code: open.json.code, deviceName: 'bad-device' };
+    if (deviceId !== undefined) body.deviceId = deviceId;
+    const res = await h.request('POST', '/api/v1/pair/claim', { token: null, body });
+    assert.equal(res.status, 400, `${label} 应被拒绝：${JSON.stringify(deviceId)}`);
+    assert.equal(res.json.error.code, 'bad_request');
+    assert.match(res.json.error.message, /UUID/);
+  }
+
+  const open = await h.request('POST', '/api/v1/pair/open', { token: null });
+  const ok = await h.request('POST', '/api/v1/pair/claim', {
+    token: null,
+    body: { code: open.json.code, deviceName: 'good', deviceId: '8f3c1a2b-1111-4222-8333-444455556666' },
+  });
+  assert.equal(ok.status, 200, '合法小写 UUID 必须配对成功');
+  assert.match(ok.json.token, /^dshr_/);
+});
+
+test('pair/open 非回环地址必须 403 forbidden（A2-4，真实 HTTP 验证）', async (t) => {
+  // 关键：绑定 0.0.0.0 并通过本机局域网 IP 访问，使 remoteAddress 成为非回环地址
+  const lanIp = findLanIpv4();
+  if (!lanIp) {
+    t.skip('本机没有可用的非回环 IPv4，跳过');
+    return;
+  }
+  const h = await startHarness(t, { host: '0.0.0.0' }, { pair: false });
+  let res;
+  try {
+    res = await fetch(`http://${lanIp}:${h.port}/api/v1/pair/open`, { method: 'POST' });
+  } catch (err) {
+    t.skip(`无法通过局域网地址访问本机（防火墙/网卡限制）：${err.message}`);
+    return;
+  }
+  assert.equal(res.status, 403, `非回环来源必须 403，实际 ${res.status}`);
+  const body = await res.json();
+  assert.equal(body.error.code, 'forbidden');
+  assert.match(body.error.message, /本机/);
+
+  // 回环仍然可用
+  const loopback = await h.request('POST', '/api/v1/pair/open', { token: null });
+  assert.equal(loopback.status, 200);
+  assert.match(loopback.json.code, /^\d{6}$/);
 });

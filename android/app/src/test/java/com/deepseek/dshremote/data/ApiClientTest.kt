@@ -91,7 +91,8 @@ class ApiClientTest {
         assertEquals(TaskStatus.QUEUED, task.status)
 
         val recorded = server.takeRequest()
-        assertEquals("/api/v1/tasks", recorded.method)
+        assertEquals("/api/v1/tasks", recorded.path)
+        assertEquals("POST", recorded.method)
         assertEquals("Bearer dshr_token", recorded.getHeader("Authorization"))
         val body = recorded.body.readUtf8()
         assertTrue("prompt 必须原样传递中文与换行", body.contains("第二行"))

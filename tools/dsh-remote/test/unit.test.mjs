@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
+  ULID_ALPHABET,
   atomicWriteFile,
   atomicWriteJson,
   createLogger,
@@ -19,6 +20,7 @@ import {
   redactSecrets,
   sha256,
   truncateUtf8,
+  truncateUtf8Tail,
   ulid,
 } from '../lib/util.mjs';
 import { EventBus } from '../lib/events.mjs';
@@ -51,6 +53,28 @@ test('newTokenId / randomPairCode 格式符合契约', () => {
     const code = randomPairCode();
     assert.match(code, /^\d{6}$/, `配对码必须是 6 位数字：${code}`);
   }
+});
+
+test('ulid/newTaskId：非法时间戳输入绝不产出畸形 id（回归：undefined 混入主键）', () => {
+  const badInputs = [Number.NaN, 'abc', undefined, null, -1, 0, Number.POSITIVE_INFINITY, {}, [], 1e30, true];
+  for (const bad of badInputs) {
+    const id = newTaskId(bad);
+    assert.match(id, /^task_[0-9A-HJKMNP-TV-Z]{26}$/, `输入 ${JSON.stringify(bad)} 产出了非法 id：${id}`);
+    assert.ok(!id.includes('undefined'), `id 不得包含 undefined：${id}`);
+    assert.ok(!id.includes('NaN'), `id 不得包含 NaN：${id}`);
+  }
+
+  // 合法时间戳必须被精确编码进前 10 位（可反解回原值）
+  const decodeTime = (id) => {
+    let value = 0;
+    for (const ch of id.slice('task_'.length, 'task_'.length + 10)) value = value * 32 + ULID_ALPHABET.indexOf(ch);
+    return value;
+  };
+  const ms = 1_730_000_000_000;
+  assert.equal(decodeTime(newTaskId(ms)), ms, '时间前缀必须可无损反解');
+  assert.equal(ulid(ms, Buffer.alloc(10)).length, 26);
+  // 超出 48 位的时间戳被夹紧，但仍然只能是合法字符
+  assert.match(ulid(2 ** 60, Buffer.alloc(10)), /^[0-9A-HJKMNP-TV-Z]{26}$/);
 });
 
 test('truncateUtf8 不会切断代理对（emoji）', () => {
@@ -214,20 +238,46 @@ test('OutputAccumulator：delta 拼接 === output，尾部空白被扣留', () =
   assert.equal(
     parts.join(''),
     acc.output,
-    '契约不变式：客户端按 seq 拼接的 delta 必须等于 output',
+    '未截断时的不变式：客户端按 seq 拼接的 delta 必须等于 output',
   );
   assert.equal(acc.truncated, false);
 });
 
-test('OutputAccumulator：超限截断并标记 truncated', () => {
+test('OutputAccumulator：超限只保留尾部（A2-5），已推送的 delta 不回滚', () => {
   const acc = new OutputAccumulator({ maxBytes: 10 });
-  const first = acc.push('一二三四五六七八九十'); // 30 字节
-  const second = acc.push('后续内容继续写入');
+  const parts = [];
+  parts.push(acc.push('头部内容会被丢弃'));
+  parts.push(acc.push('尾部保留XYZ'));
   assert.equal(acc.truncated, true);
-  assert.ok(first.includes('[输出超过网关上限，已截断]'));
-  assert.equal(second, '');
-  assert.equal(first + second, acc.output);
-  assert.equal(acc.output, '一二三' + '\n[输出超过网关上限，已截断]\n');
+  assert.ok(Buffer.byteLength(acc.output, 'utf8') <= 10, 'output 必须被限制在 maxBytes 内');
+  assert.equal(acc.output, '保留XYZ', '应精确保留末 10 字节且从字符边界开始');
+  assert.ok(acc.output.endsWith('XYZ'), '必须保留的是尾部而不是头部');
+  assert.ok(!acc.output.includes('头部'), '超限部分应从头部丢弃');
+  // 已推送的 delta 不回滚：拼接结果比 output 更长，客户端以详情接口为准
+  assert.ok(parts.join('').length > acc.output.length);
+  assert.equal(parts[0], '头部内容会被丢弃', '已经下发的增量不改写');
+  assert.ok(parts.join('').endsWith(acc.output), 'output 必须是已推送文本的后缀');
+  assert.equal(acc.totalBytes, Buffer.byteLength(parts.join(''), 'utf8'));
+  acc.finish();
+});
+
+test('OutputAccumulator：截断不切断多字节字符', () => {
+  const acc = new OutputAccumulator({ maxBytes: 7 });
+  const parts = [];
+  parts.push(acc.push('😀😀😀😀'));
+  assert.equal(acc.truncated, true);
+  assert.ok(Buffer.byteLength(acc.output, 'utf8') <= 7);
+  assert.ok(!acc.output.includes('\uFFFD'), '不得产生替换字符（说明切断了多字节序列）');
+  assert.equal(acc.output, '😀');
+});
+
+test('truncateUtf8Tail：按字节保留尾部且不产生非法字符', () => {
+  assert.equal(truncateUtf8Tail('abcdef', 3), 'def');
+  assert.equal(truncateUtf8Tail('abc', 100), 'abc');
+  assert.equal(truncateUtf8Tail('中文中文', 6), '中文');
+  assert.ok(!truncateUtf8Tail('中文中文', 7).includes('\uFFFD'));
+  assert.equal(Buffer.byteLength(truncateUtf8Tail('😀😀', 5), 'utf8'), 4);
+  assert.equal(truncateUtf8Tail('abc', 0), '');
 });
 
 test('buildDshArgv：prompt 作为单个 argv 元素零改写传递', () => {

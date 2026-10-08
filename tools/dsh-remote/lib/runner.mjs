@@ -15,7 +15,7 @@
  */
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { truncateUtf8 } from './util.mjs';
+import { truncateUtf8, truncateUtf8Tail } from './util.mjs';
 
 export const IS_WINDOWS = process.platform === 'win32';
 
@@ -204,17 +204,25 @@ export class TaskProcess {
 /**
  * 输出聚合器：把 stdout 分片转成「可安全流式下发的增量」，并实施总量上限。
  *
- * 不变式：`push()/finish()` 返回的字符串按顺序拼接 === `output`（含截断标记）。
- * 因此客户端按 seq 拼接 delta 得到的文本与服务端落库输出完全一致。
+ * 截断策略（契约 v1.1 A2-5）：
+ * - 超过 `maxBytes` 时**只保留尾部**，并置 `truncated=true`；
+ * - **已推送的 delta 不回滚**：客户端按 seq 拼出的文本可能比 output 长，
+ *   此时应以任务详情接口的 `output` 为准（详见 README「输出截断」）。
+ * 为什么保留尾部而不是头部：命令输出的结论通常在末尾，尾部信息量更大。
+ *
+ * 空白处理：尾部纯空白会被扣留（不进入 output），一旦后续来了非空白内容再按序放出，
+ * 因此在未截断时依然满足「客户端拼接 delta === 详情接口 output」。
  */
 export class OutputAccumulator {
   /** @param {{maxBytes: number}} opts */
   constructor({ maxBytes }) {
     this.maxBytes = maxBytes;
-    this.emitted = 0;
+    /** 契约字段 output：未截断时为全部输出；截断后为其尾部。 */
     this.output = '';
-    this.pending = ''; // 扣留的尾部纯空白（可能还会被后续非空白内容"救回"）
+    /** 已产出的总字节数（诊断用，截断后仍可知道真实体积）。 */
+    this.totalBytes = 0;
     this.truncated = false;
+    this.pending = ''; // 扣留的尾部纯空白（可能还会被后续非空白内容"救回"）
   }
 
   /**
@@ -223,31 +231,25 @@ export class OutputAccumulator {
    * @returns {string} 可以立即作为 task.output 增量下发的内容（可能为空串）
    */
   push(chunk) {
-    if (this.truncated) return ''; // 截断后继续读取 stdout 但不落库，防止子进程被背压卡死
     this.pending += chunk;
     // 只放出到「最后一个非空白字符」为止，尾部空白继续扣留
     let cut = this.pending.length;
     while (cut > 0 && /\s/.test(this.pending[cut - 1])) cut--;
-    let visible = this.pending.slice(0, cut);
+    const visible = this.pending.slice(0, cut);
     this.pending = this.pending.slice(cut);
     if (!visible) return '';
 
-    if (this.emitted + Buffer.byteLength(visible, 'utf8') > this.maxBytes) {
-      visible = truncateUtf8(visible, this.maxBytes - this.emitted);
-      const marker = '\n[输出超过网关上限，已截断]\n';
-      this.truncated = true;
-      this.pending = '';
-      const out = visible + marker;
-      this.output += out;
-      this.emitted = Buffer.byteLength(this.output, 'utf8');
-      return out;
-    }
+    this.totalBytes += Buffer.byteLength(visible, 'utf8');
     this.output += visible;
-    this.emitted += Buffer.byteLength(visible, 'utf8');
-    return visible;
+    if (Buffer.byteLength(this.output, 'utf8') > this.maxBytes) {
+      // 超限：丢弃头部、只保留尾部（truncateUtf8Tail 不会切断多字节字符）
+      this.truncated = true;
+      this.output = truncateUtf8Tail(this.output, this.maxBytes);
+    }
+    return visible; // 全量下发：已推送的 delta 不回滚
   }
 
-  /** 子进程结束后调用：丢弃尾部纯空白，返回是否还有未下发的增量（恒为空串）。 */
+  /** 子进程结束后调用：丢弃尾部纯空白（output 已是有界尾部或完整内容）。 */
   finish() {
     this.pending = '';
     return '';

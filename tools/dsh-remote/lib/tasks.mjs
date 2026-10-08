@@ -42,7 +42,7 @@ export function isTerminal(status) {
 /** 携带契约错误码的业务异常，HTTP 层据此生成统一错误体。 */
 export class TaskError extends Error {
   /**
-   * @param {'bad_request'|'not_found'|'busy'|'internal'} code
+   * @param {'bad_request'|'not_found'|'busy'|'conflict'|'internal'} code
    * @param {string} message
    */
   constructor(code, message) {
@@ -176,7 +176,11 @@ export class TaskManager {
     if (prompt.length > MAX_PROMPT_CHARS) {
       throw new TaskError('bad_request', `prompt 过长（上限 ${MAX_PROMPT_CHARS} 字符）`);
     }
-    if (this.queue.length >= this.config.maxQueue) {
+    // 契约 A2 语义：maxConcurrent 只限制同时 running 的数量，超出进入 queued；
+    // 只有「当前没有空闲槽位、且排队数已达 maxQueue」时才算队列满 → 429 busy。
+    // 因此能立刻开跑的任务不占用队列额度（maxQueue=0 时第一个任务依然应当被接受）。
+    const canStartNow = this.running.size < this.config.maxConcurrent;
+    if (!canStartNow && this.queue.length >= this.config.maxQueue) {
       throw new TaskError('busy', `任务队列已满（上限 ${this.config.maxQueue}），请稍后重试`);
     }
     const timeout = this.#normalizeTimeout(timeoutSec);
@@ -288,14 +292,16 @@ export class TaskManager {
   }
 
   /**
-   * 删除任务记录（契约 §3.5：仅终态可删）。
+   * 删除任务记录。契约 v1.1 A2-2：**仅终态可删**，活动态返回 409 conflict。
    * @param {string} id
    * @returns {Promise<boolean>}
    */
   async remove(id) {
     const task = this.tasks.get(id);
     if (!task) return false;
-    if (!isTerminal(task.status)) throw new TaskError('bad_request', '仅终态任务可删除');
+    if (!isTerminal(task.status)) {
+      throw new TaskError('conflict', `仅终态任务可删除（当前状态：${task.status}）`);
+    }
     this.tasks.delete(id);
     await fsp.rm(this.taskFile(id), { force: true }).catch(() => {});
     return true;
@@ -336,6 +342,9 @@ export class TaskManager {
 
   /** 原子落盘（含内部 meta，便于重启后排障）。 */
   async persist(task) {
+    // 已被 DELETE 的任务不再落盘：否则「删除」与运行收尾阶段的在途 persist 竞争，
+    // 会把已删除的任务文件重新写回磁盘。
+    if (!this.tasks.has(task.id)) return;
     try {
       await atomicWriteJson(this.taskFile(task.id), task);
     } catch (err) {
@@ -485,7 +494,7 @@ export class TaskManager {
     }
   }
 
-  /** 真正下发一次 task.output 事件，并同步累加 task.output（保证两者严格一致）。 */
+  /** 真正下发一次 task.output 事件，并同步 output/truncated（截断策略见 OutputAccumulator）。 */
   #flush(task, handle) {
     if (handle.flushTimer) {
       clearTimeout(handle.flushTimer);
@@ -494,7 +503,10 @@ export class TaskManager {
     const delta = handle.pending;
     if (!delta) return;
     handle.pending = '';
-    task.output += delta;
+    // 注意：这里用 acc.output 覆盖而非累加 —— 超限时 output 只保留尾部（A2-5），
+    // 而本次 delta 已经全量下发，客户端拼接结果可能更长，以详情接口为准。
+    task.output = handle.acc.output;
+    task.truncated = handle.acc.truncated;
     this.bus.publish('task.output', { delta }, task.id);
     void this.#persistThrottled(task);
   }

@@ -136,8 +136,23 @@ class ApiException(
     override val message: String,
     val httpStatus: Int = 0,
 ) : Exception(message) {
+    /** 令牌失效：必须清空本地令牌并回到配置页，而不是无脑重试（契约 §0 + 裁定 A4）。 */
     val isUnauthorized: Boolean get() = code == "unauthorized" || httpStatus == 401
+
+    /** 403：配对关闭/网络异常导致的越权，与 401 区别处理（不清令牌，提示重新生成配对码）。 */
+    val isForbidden: Boolean get() = code == "forbidden" || httpStatus == 403
+
+    /** 429：可能是 `busy`（队列满，裁定 A2）或 `rate_limited`（失败限速，契约 §6.4）。 */
     val isRateLimited: Boolean get() = code == "rate_limited" || httpStatus == 429
+
+    /** 队列满（裁定 A2）：UI 必须显示"服务器繁忙，请稍后重试"，不能与"排队中"混为一谈。 */
+    val isBusy: Boolean get() = code == "busy"
+
+    /** 409：对活动态任务执行 DELETE（裁定 A7）。 */
+    val isConflict: Boolean get() = code == "conflict" || httpStatus == 409
+
+    /** 413：请求体过大。 */
+    val isPayloadTooLarge: Boolean get() = code == "payload_too_large" || httpStatus == 413
 }
 
 /** 本地保存的连接配置（DataStore Preferences 的领域模型）。 */
@@ -159,6 +174,14 @@ sealed interface ConnectionState {
 
     /** 断开后等待退避重连；[retryInMs] 让 UI 能显示倒计时。 */
     data class Retrying(val attempt: Int, val retryInMs: Long, val reason: String) : ConnectionState
+
+    /**
+     * 令牌失效（HTTP 401）。
+     *
+     * 单独一种状态而不是复用 [Failed]：401 需要"清空本地令牌 + 跳回配置页 + 提示重新配对"，
+     * 而 [Failed] 只是展示性错误（例如尚未配置），处理动作完全不同。
+     */
+    data class Unauthorized(val reason: String) : ConnectionState
 
     data class Failed(val reason: String) : ConnectionState
 }

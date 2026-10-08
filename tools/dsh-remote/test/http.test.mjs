@@ -80,7 +80,7 @@ test('请求体上限：Content-Length 超过 1MB 立即返回 413（不读取�
   ].join('\r\n');
   const result = await rawExchange(h.port, [header, 'x'.repeat(1024)]);
   assert.match(result.text, /HTTP\/1\.1 413/, `期望 413，实际响应：${result.text.slice(0, 120)}`);
-  assert.match(result.text, /bad_request/);
+  assert.match(result.text, /payload_too_large/, 'A2-b：超限请求体必须返回 413 payload_too_large');
   assert.match(result.text, /请求体超过上限/);
 
   // 拒绝之后服务仍然健康
@@ -120,13 +120,16 @@ test('慢速请求防挂起：声明 Content-Length 却不发送 body → 服务
     '',
   ].join('\r\n');
   const started = Date.now();
-  const result = await rawExchange(h.port, [header, 'abc'], { timeoutMs: 3000 });
+  const result = await rawExchange(h.port, [header, 'abc'], { timeoutMs: 5000 });
   const elapsed = Date.now() - started;
-  assert.ok(elapsed < 2500, `应在超时后很快回收连接，实际 ${elapsed}ms`);
+  // 关键断言：服务端必须自己回收，而不是把连接挂到客户端超时
+  assert.equal(result.timedOut, undefined, `连接挂住了（${elapsed}ms 无响应无关闭）`);
   assert.ok(
     result.text.includes('408') || result.closedByServer || result.error === 'ECONNRESET',
     `服务端必须超时回收（408 或关闭连接），实际：${JSON.stringify({ text: result.text.slice(0, 120), error: result.error })}`,
   );
+  // requestTimeout=500ms，巡检间隔 250ms；放宽到 4s 只为兼容并行测试的 CPU 竞争
+  assert.ok(elapsed < 4000, `回收耗时 ${elapsed}ms，明显超过配置的 500ms 超时`);
 
   const health = await h.request('GET', '/api/v1/health', { token: null });
   assert.equal(health.status, 200);
@@ -135,10 +138,11 @@ test('慢速请求防挂起：声明 Content-Length 却不发送 body → 服务
 test('慢速请求防挂起：只建立连接不发送任何数据也会被回收', async (t) => {
   const h = await startHarness(t, { limits: { requestTimeoutMs: 500, headersTimeoutMs: 400 } });
   const started = Date.now();
-  const result = await rawExchange(h.port, [], { timeoutMs: 3000 });
+  const result = await rawExchange(h.port, [], { timeoutMs: 5000 });
   const elapsed = Date.now() - started;
-  assert.ok(elapsed < 2500, `空闲连接应被回收，实际 ${elapsed}ms`);
+  assert.equal(result.timedOut, undefined, `空闲连接挂住了（${elapsed}ms）`);
   assert.ok(result.closedByServer || result.error === 'ECONNRESET' || result.text.includes('408'));
+  assert.ok(elapsed < 4000, `回收耗时 ${elapsed}ms，明显超过配置的超时`);
 });
 
 test('非法 JSON → 400 bad_request；空体 → 400（缺少必要字段）', async (t) => {

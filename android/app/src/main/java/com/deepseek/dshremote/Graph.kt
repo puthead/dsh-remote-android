@@ -38,7 +38,7 @@ object Graph {
             instance = TaskRepository(
                 api = ApiClient(),
                 prefs = PrefsStore(appContext),
-                history = HistoryStore(HistoryStore.defaultFile(appContext.filesDir)),
+                historyStore = HistoryStore(HistoryStore.defaultFile(appContext.filesDir)),
                 eventStream = EventStream(SseClient()),
                 scope = appScope,
             )

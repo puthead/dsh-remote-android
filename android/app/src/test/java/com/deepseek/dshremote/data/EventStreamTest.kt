@@ -189,7 +189,7 @@ class EventStreamTest {
     }
 
     @Test
-    fun `令牌失效时停止重连并进入失败态`() = runBlocking {
+    fun `令牌失效时停止重连并进入未授权态`() = runBlocking {
         server.enqueue(
             MockResponse().setResponseCode(401)
                 .setBody("""{"error":{"code":"unauthorized","message":"设备令牌无效或已吊销"}}"""),
@@ -199,12 +199,13 @@ class EventStreamTest {
         val stream = EventStream(client, ReconnectBackoff(baseMs = 10, maxMs = 20))
         stream.start(scope, { StreamRequest(streamUrl(), "bad") }, EventReducer(), {}, { states.add(it) })
 
-        withTimeout(5_000) { while (states.none { it is ConnectionState.Failed }) delay(10) }
+        // 401 必须是独立的 Unauthorized 态：上层据此清空本地令牌并回到配置页
+        withTimeout(5_000) { while (states.none { it is ConnectionState.Unauthorized }) delay(10) }
         delay(200)
         // 401 属于配置问题：重试只会刷爆限速，必须只请求一次
         assertEquals(1, server.requestCount)
-        val failed = states.filterIsInstance<ConnectionState.Failed>().first()
-        assertTrue(failed.reason.contains("重新配对"))
+        val unauthorized = states.filterIsInstance<ConnectionState.Unauthorized>().first()
+        assertTrue(unauthorized.reason.contains("重新配对"))
 
         stream.stop()
         scope.cancel()

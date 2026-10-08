@@ -8,12 +8,15 @@ import org.junit.Test
 /** [TaskMerger] 的归并规则测试（状态只进不退、输出取更长、字段缺失不覆盖）。 */
 class TaskMergerTest {
 
-    private fun running(id: String = "task_1") = RemoteTask(
+    private fun running(
+        id: String = "task_1",
+        status: TaskStatus = TaskStatus.RUNNING,
+    ) = RemoteTask(
         id = id,
         title = "跑单测",
         prompt = "跑单测",
         workspace = "D:\\proj",
-        status = TaskStatus.RUNNING,
+        status = status,
         createdAt = 100,
         startedAt = 200,
         output = "部分输出",

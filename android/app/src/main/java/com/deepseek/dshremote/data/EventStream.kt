@@ -101,7 +101,9 @@ class EventReducer {
         val out = mutableListOf<TaskEvent>()
         while (pending.isNotEmpty()) {
             val first = pending.firstKey()
-            if (onlyContiguous && first != lastApplied + 1) break
+            // 连续性是"相对上一个已应用事件"才有意义的约束：初始游标 -1 表示"不知道流位置"，
+            // 此时必须接受服务端给的第一个 seq（它不一定是 1），否则整条流永远放行不了。
+            if (onlyContiguous && lastApplied >= 0 && first != lastApplied + 1) break
             val next = pending.remove(first) ?: break
             lastApplied = next.seq
             out += next
@@ -202,8 +204,8 @@ class EventStream(
 
             val fatal = failure as? SseClient.SseHttpException
             if (fatal != null && fatal.httpStatus == 401) {
-                // 令牌失效属于配置问题，重试只会刷爆限速；交给 UI 引导重新配对
-                onState(ConnectionState.Failed("设备令牌无效，请重新配对（HTTP 401）"))
+                // 令牌失效属于配置问题，重试只会刷爆限速；交给上层清令牌并引导重新配对
+                onState(ConnectionState.Unauthorized("设备令牌已失效，请重新配对"))
                 return@launch
             }
             val wait = backoff.delayFor(attempt)

@@ -13,10 +13,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -154,6 +154,7 @@ fun HomeScreen(
                 onManualWorkspaceChange = viewModel::onManualWorkspaceChange,
                 onSelectWorkspace = viewModel::selectWorkspace,
                 onSubmit = viewModel::submit,
+                onUseSample = viewModel::fillSample,
             )
 
             Text(
@@ -213,6 +214,7 @@ private fun SubmitCard(
     onManualWorkspaceChange: (String) -> Unit,
     onSelectWorkspace: (String) -> Unit,
     onSubmit: () -> Unit,
+    onUseSample: () -> Unit,
 ) {
     Card(
         modifier = Modifier
@@ -250,6 +252,7 @@ private fun SubmitCard(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                TextButton(onClick = onUseSample) { Text("填入示例") }
                 if (ui.submitting) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     Text(
@@ -259,7 +262,7 @@ private fun SubmitCard(
                     )
                 }
                 Button(onClick = onSubmit, enabled = ui.canSubmit) {
-                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("提交任务", modifier = Modifier.padding(start = 6.dp))
                 }
             }
@@ -367,6 +370,14 @@ private fun TaskCard(
                 StatusChip(task.status)
             }
             TaskMeta(task = task, now = now)
+            // 裁定 A2：并发满时任务进队列（不是被拒绝）。排队与"服务器繁忙"必须让用户一眼分清
+            if (task.status == com.deepseek.dshremote.data.TaskStatus.QUEUED) {
+                Text(
+                    text = "已入队，等待空闲执行槽（这不是提交失败）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             OutputPreview(output = task.output)
             if (onCancel != null && task.status.isActive) {
                 Text(

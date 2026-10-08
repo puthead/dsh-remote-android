@@ -1,0 +1,30 @@
+[
+  {
+    "payload": "dshremote:pair?code=482913",
+    "version": 2,
+    "mask": 0,
+    "golden": "qr-v2-m0.txt",
+    "size": 25
+  },
+  {
+    "payload": "dshremote:pair?code=482913&host=192.168.1.23:8787",
+    "version": 3,
+    "mask": 3,
+    "golden": "qr-v3-m3.txt",
+    "size": 29
+  },
+  {
+    "payload": "dshremote:pair?code=482913&host=192.168.1.23:8787",
+    "version": 4,
+    "mask": 7,
+    "golden": "qr-v4-m7.txt",
+    "size": 33
+  },
+  {
+    "payload": "dshremote:pair?code=482913&host=192.168.100.200:8787&name=DESKTOP-TEST-PC-01",
+    "version": 5,
+    "mask": 0,
+    "golden": "qr-v5-m0.txt",
+    "size": 37
+  }
+]

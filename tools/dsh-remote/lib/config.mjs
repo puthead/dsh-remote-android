@@ -92,12 +92,16 @@ function deepMerge(base, patch) {
 }
 
 /**
- * 合并配置。
+ * 合并配置。支持任意数量的补丁（后者覆盖前者）。
+ * 为什么做成变参：曾出现「调用方多传一个 patch 参数被静默忽略」的缺陷
+ * （测试脚手架因此丢掉了所有用例级覆盖，表现为假失败）。变参 + 单测锁定后不会再发生。
  * @param {object} base
- * @param {object} patch
+ * @param {...object} patches
  */
-export function mergeConfig(base, patch) {
-  return deepMerge(base, patch);
+export function mergeConfig(base, ...patches) {
+  let out = base;
+  for (const patch of patches) out = deepMerge(out, patch);
+  return out;
 }
 
 /**

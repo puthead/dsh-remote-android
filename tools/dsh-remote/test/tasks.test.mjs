@@ -69,14 +69,15 @@ test('prompt 特殊字符（中文/双引号/单引号/换行/制表/反斜杠/�
   assert.equal(done.output, prompt, 'stdout 必须与 prompt 逐字节一致（未经 shell 解释）');
 
   // 子进程实际收到的 argv / cwd / DSH_HOME
+  // 说明：子进程里 process.argv.slice(2) 天然不含 node 与脚本自身，
+  // 因此这里断言「脚本自身 = binPath」+「3 个位置参数」，等价于网关传了 4 段 argv。
   const calls = await h.recorded();
   assert.equal(calls.length, 1);
   const [call] = calls;
-  assert.equal(call.argv.length, 4, 'argv 必须是 [bin.js, --profile, headless, prompt] 四段');
-  assert.equal(call.argv[0], h.config.dsh.binPath);
-  assert.equal(call.argv[1], '--profile');
-  assert.equal(call.argv[2], 'headless');
-  assert.equal(call.argv[3], prompt, 'prompt 必须作为单个 argv 元素原样到达子进程');
+  assert.equal(call.entry, h.config.dsh.binPath, 'argv[0] 必须是 dsh 入口 bin.js');
+  assert.deepEqual(call.argv.slice(0, 2), ['--profile', 'headless'], 'argv[1..2] 必须是 profile 参数');
+  assert.equal(call.argv.length, 3, 'argv 数组必须恰好是 [bin.js, --profile, headless, prompt] 四段');
+  assert.equal(call.argv[2], prompt, 'prompt 必须作为单个 argv 元素原样到达子进程');
   assert.equal(call.cwd, await fs.realpath(h.workspace), 'cwd 必须是任务 workspace');
   assert.equal(call.dshHome, h.config.home, 'DSH_HOME 必须指向网关 home（含 .credentials.yaml）');
 });
@@ -256,7 +257,7 @@ test('任务列表：倒序 + limit/cursor 分页 + status=active 过滤', async
   await h.request('POST', `/api/v1/tasks/${longRunning.body.id}/cancel`);
 });
 
-test('删除任务：终态 204、活动任务 400、未知任务 404', async (t) => {
+test('删除任务：终态 204、活动任务 409 conflict、未知任务 404', async (t) => {
   const h = await startHarness(t, { maxConcurrent: 1 });
   const created = await submit(h, scripted({ mode: 'echo', text: 'done', chunks: 1 }));
   await waitForTask(h, created.body.id);
@@ -269,8 +270,9 @@ test('删除任务：终态 204、活动任务 400、未知任务 404', async (t
 
   const running = await submit(h, scripted({ mode: 'sleep', ms: 3000 }));
   const delActive = await h.request('DELETE', `/api/v1/tasks/${running.body.id}`);
-  assert.equal(delActive.status, 400);
-  assert.equal(delActive.json.error.code, 'bad_request');
+  assert.equal(delActive.status, 409, 'A2-2：活动态删除必须返回 409 conflict');
+  assert.equal(delActive.json.error.code, 'conflict');
+  assert.match(delActive.json.error.message, /仅终态任务可删除/);
 
   const missingCancel = await h.request('POST', '/api/v1/tasks/task_missing/cancel');
   assert.equal(missingCancel.status, 404);
@@ -281,6 +283,48 @@ test('删除任务：终态 204、活动任务 400、未知任务 404', async (t
   const files = await fs.readdir(h.config.tasksDir);
   assert.ok(!files.includes(`${created.body.id}.json`));
   await h.request('POST', `/api/v1/tasks/${running.body.id}/cancel`);
+});
+
+test('输出截断：超过 maxOutputBytes 只保留尾部并置 truncated=true（A2-5）', async (t) => {
+  const MAX = 2048;
+  const TOTAL = 8192;
+  const h = await startHarness(t, { limits: { maxOutputBytes: MAX } });
+
+  /** 与 fake-dsh 的 big 模式完全一致的数据流生成器（用于精确比对尾部）。 */
+  const generateStream = (size, blockSize = 512) => {
+    let out = '';
+    let written = 0;
+    let index = 0;
+    while (written < size) {
+      const header = `<${String(index).padStart(4, '0')}>`;
+      const body = 'x'.repeat(Math.max(0, Math.min(blockSize, size - written) - header.length));
+      out += header + body;
+      written += header.length + body.length;
+      index++;
+    }
+    return out;
+  };
+  const full = generateStream(TOTAL);
+  assert.equal(full.length, TOTAL);
+
+  const created = await submit(h, scripted({ mode: 'big', bytes: TOTAL, blockSize: 512 }));
+  const done = await waitForTask(h, created.body.id);
+  assert.equal(done.status, 'succeeded');
+  assert.equal(done.truncated, true, '超限必须置 truncated=true');
+  assert.equal(
+    done.output,
+    full.slice(-MAX),
+    'output 必须是完整数据流的末 2048 字符（保留尾部而非头部，且不切字符）',
+  );
+  assert.ok(Buffer.byteLength(done.output, 'utf8') <= MAX);
+  assert.ok(!done.output.includes('<0000>'), '头部内容必须被丢弃');
+  assert.ok(done.output.endsWith('x'), '尾部内容必须保留');
+
+  // 未超限的任务不受影响
+  const small = await submit(h, scripted({ mode: 'echo', text: '短输出', chunks: 1 }));
+  const smallDone = await waitForTask(h, small.body.id);
+  assert.equal(smallDone.truncated, false);
+  assert.equal(smallDone.output, '短输出');
 });
 
 test('discoverSessionId：仅识别本次新增的 session 条目，多候选时不猜', async () => {

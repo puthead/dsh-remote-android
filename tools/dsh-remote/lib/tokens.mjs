@@ -9,6 +9,7 @@
  * 3. 配对码用 crypto 随机数生成（util.randomPairCode），一次性、5 分钟过期、
  *    新码会使旧码立即失效（避免多码并存被在线暴力试探）。
  */
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import crypto from 'node:crypto';
 import { atomicWriteJson, newTokenId, randomBase64Url, randomPairCode, readJsonFile, sha256 } from './util.mjs';
@@ -28,6 +29,14 @@ function safeEqual(a, b) {
 
 /**
  * 设备令牌库。
+ *
+ * 一致性设计（为什么需要"外部改动检测"）：
+ * 本地管理命令 `devices revoke` 直接改 %DSH_HOME%/devices.json，而正在运行的网关把设备
+ * 缓存在内存里。若不做检测，会出现两个问题：
+ * 1) CLI 吊销后，网关内存里仍有该设备 → 旧令牌依旧放行（安全漏洞）；
+ * 2) 网关后续一次 flush 会把被吊销的设备写回文件（吊销被"复活"）。
+ * 因此：校验失败时按 mtime 同步重载一次再判定；周期性维护也先重载后落盘；
+ * 结构变更（新增/吊销）由网关自己发起时则以内存为准。
  */
 export class DeviceStore {
   /**
@@ -39,7 +48,12 @@ export class DeviceStore {
     this.logger = logger;
     /** @type {Array<{tokenId:string, tokenHash:string, deviceName:string, deviceIdHash:string|null, pairedAt:number, lastSeenAt:number}>} */
     this.devices = [];
+    /** 有待写入磁盘的改动（含仅 lastSeenAt 的更新）。 */
     this.dirty = false;
+    /** 存在设备增删（结构变更）：此时不允许被外部文件覆盖。 */
+    this.structuralDirty = false;
+    /** 上次已知的文件 mtimeMs，用于识别外部（CLI）改动。 */
+    this.mtimeMs = 0;
   }
 
   /** 从磁盘加载（文件不存在视为空库）。 */
@@ -49,14 +63,54 @@ export class DeviceStore {
     else if (error) this.logger?.warn(`设备令牌库读取失败（忽略）：${error.message}`);
     const list = Array.isArray(value?.devices) ? value.devices : [];
     this.devices = list.filter((d) => d && typeof d.tokenHash === 'string' && typeof d.tokenId === 'string');
+    this.dirty = false;
+    this.structuralDirty = false;
+    this.#rememberMtime();
     return this.devices.length;
+  }
+
+  /**
+   * 若文件被外部改动（CLI 吊销/手工编辑）则同步重载。
+   * 为什么同步：认证路径需要立即得到结论，且该分支只在"内存里找不到令牌"时才走，
+   * 频率由限速器兜底，不会成为性能瓶颈。
+   * @returns {boolean} 是否发生了重载
+   */
+  reloadIfChangedSync() {
+    try {
+      const stat = fs.statSync(this.file);
+      if (stat.mtimeMs === this.mtimeMs) return false;
+      const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      const list = Array.isArray(parsed?.devices) ? parsed.devices : [];
+      this.devices = list.filter((d) => d && typeof d.tokenHash === 'string' && typeof d.tokenId === 'string');
+      this.dirty = false;
+      this.structuralDirty = false;
+      this.mtimeMs = stat.mtimeMs;
+      this.logger?.info(`设备库被外部修改，已重新加载：${this.devices.length} 个设备`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** 立即落盘（原子写）。 */
   async flush() {
+    // 只有"非结构变更"（如 lastSeenAt 更新）才允许先接受外部改动，
+    // 避免把 CLI 刚吊销的设备又写回去；结构变更以内存为准。
+    if (!this.structuralDirty) this.reloadIfChangedSync();
     if (!this.dirty) return;
     this.dirty = false;
+    this.structuralDirty = false;
     await atomicWriteJson(this.file, { version: 1, devices: this.devices });
+    this.#rememberMtime();
+  }
+
+  /** 记录当前文件 mtime（写盘后 mtime 会变化，必须刷新，否则会误判为外部改动）。 */
+  #rememberMtime() {
+    try {
+      this.mtimeMs = fs.statSync(this.file).mtimeMs;
+    } catch {
+      this.mtimeMs = 0;
+    }
   }
 
   /** 对外可见的设备列表（绝不返回 tokenHash）。 */
@@ -76,16 +130,28 @@ export class DeviceStore {
    */
   verify(token) {
     if (typeof token !== 'string' || !token.startsWith(TOKEN_PREFIX)) return null;
+    // 关键：每次鉴权前先接受外部改动。否则「CLI 吊销」会被内存里的旧副本掩盖 ——
+    // 被吊销的令牌依然能在内存中命中，等于吊销无效（安全缺陷）。
+    // 这里只做一次 stat + mtime 比较，未变化时开销极小。
+    this.reloadIfChangedSync();
     const digest = sha256(token);
+    const matched = this.#match(digest);
+    if (!matched) return null;
+    this.touch(matched.tokenId);
+    return { tokenId: matched.tokenId, deviceName: matched.deviceName };
+  }
+
+  /**
+   * 恒定时间比较：故意不做提前返回，保证比较次数与设备数量相关而与命中位置无关。
+   * @param {Buffer} digest
+   */
+  #match(digest) {
     let matched = null;
-    // 注意：故意不做提前返回，保证比较次数与设备数量相关而与命中位置无关
     for (const device of this.devices) {
       const stored = Buffer.from(device.tokenHash, 'hex');
       if (safeEqual(stored, digest)) matched = device;
     }
-    if (!matched) return null;
-    this.touch(matched.tokenId);
-    return { tokenId: matched.tokenId, deviceName: matched.deviceName };
+    return matched;
   }
 
   /**
@@ -116,12 +182,10 @@ export class DeviceStore {
       lastSeenAt: at,
     });
     this.dirty = true;
+    this.structuralDirty = true; // 新增设备属于结构变更，落盘时以内存为准
     await this.flush();
     return { token, tokenId, revokedTokenIds };
   }
-
-  /** 内部：记录被剔除的令牌 id（保持 issue() 主流程可读）。 */
-  #revokedBuffer = [];
 
   /** 吊销令牌。 @param {string} tokenId @returns {Promise<boolean>} */
   async revoke(tokenId) {
@@ -129,6 +193,7 @@ export class DeviceStore {
     this.devices = this.devices.filter((d) => d.tokenId !== tokenId);
     if (this.devices.length === before) return false;
     this.dirty = true;
+    this.structuralDirty = true; // 吊销属于结构变更
     await this.flush();
     return true;
   }

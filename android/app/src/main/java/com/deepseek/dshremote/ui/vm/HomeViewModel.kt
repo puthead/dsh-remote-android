@@ -2,6 +2,7 @@ package com.deepseek.dshremote.ui.vm
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.deepseek.dshremote.data.Logger
 import com.deepseek.dshremote.data.RemoteTask
 import com.deepseek.dshremote.data.TaskRepository
 import com.deepseek.dshremote.data.WorkspaceInfo
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.deepseek.dshremote.ui.components.label
 
 /** 首页：提交任务 + 看活动任务。 */
 class HomeViewModel(private val repository: TaskRepository) : ViewModel() {
@@ -55,6 +57,18 @@ class HomeViewModel(private val repository: TaskRepository) : ViewModel() {
 
     fun onPromptChange(value: String) = _ui.update { it.copy(prompt = value) }
 
+    /**
+     * 填入一条中文多行示例任务。
+     *
+     * 产品上它是"一键试用"，工程上它也是**可自动化验证中文+多行输入**的入口：
+     * 模拟器/CI 里通常没有中文输入法（`adb shell input text` 对非 ASCII 直接抛 NPE），
+     * 有了这个按钮，E2E 用例仍然能覆盖"中文多行 prompt → 提交 → 流式输出"全链路。
+     */
+    fun fillSample() {
+        Logger.i(TAG, "点击「填入示例」")
+        _ui.update { it.copy(prompt = SAMPLE_PROMPT, title = "示例：中文多行任务") }
+    }
+
     fun onTitleChange(value: String) = _ui.update { it.copy(title = value) }
 
     fun onManualWorkspaceChange(value: String) = _ui.update { it.copy(manualWorkspace = value) }
@@ -89,6 +103,11 @@ class HomeViewModel(private val repository: TaskRepository) : ViewModel() {
 
     fun submit() {
         val state = _ui.value
+        Logger.i(
+            TAG,
+            "点击「提交任务」 canSubmit=${state.canSubmit} workspace='${state.effectiveWorkspace}' " +
+                "promptLen=${state.prompt.length} submitting=${state.submitting}",
+        )
         if (state.submitting) return
         val workspace = state.effectiveWorkspace
         if (workspace == null) {
@@ -105,13 +124,20 @@ class HomeViewModel(private val repository: TaskRepository) : ViewModel() {
             )
             result
                 .onSuccess { task ->
+                    Logger.i(TAG, "提交成功 id=${task.id} status=${task.status.wire}")
                     // 提交成功才清空输入框：失败时保留内容，用户可以直接重试
                     _ui.update {
-                        it.copy(submitting = false, prompt = "", title = "", message = "已提交：${task.title.ifBlank { task.id }}")
+                        it.copy(
+                            submitting = false,
+                            prompt = "",
+                            title = "",
+                            message = "已提交：${task.title.ifBlank { task.id }}（状态 ${task.status.label()}）",
+                        )
                     }
                     _submittedTaskId.value = task.id
                 }
                 .onFailure { error ->
+                    Logger.w(TAG, "提交失败", error)
                     _ui.update { it.copy(submitting = false, message = "提交失败：${error.friendlyMessage()}") }
                 }
         }
@@ -130,4 +156,14 @@ class HomeViewModel(private val repository: TaskRepository) : ViewModel() {
     }
 
     fun consumeMessage() = _ui.update { it.copy(message = null) }
+
+    private companion object {
+        const val TAG = "HomeViewModel"
+
+        /** 示例提示词：刻意包含中文、换行与转义字符，作为输入能力的自检样本。 */
+        val SAMPLE_PROMPT = """
+            把当前工作目录的文件列表列出来，并用一句中文总结。
+            第二行：确认多行与中文输入都可用。
+        """.trimIndent()
+    }
 }

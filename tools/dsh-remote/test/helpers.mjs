@@ -42,26 +42,35 @@ export async function makeSandbox(t, overrides = {}, { autoCleanup = true } = {}
   await fs.mkdir(workspace, { recursive: true });
   // 假凭据：替身不校验内容，这里只用于证明凭据文件被放在正确位置
   await fs.writeFile(path.join(home, '.credentials.yaml'), 'DEEPSEEK_API_KEY: sk-test-fake-key-not-real\n', 'utf8');
+  // 与网关启动时的 ensureRuntimeDirs 保持一致：测试需要能在启动前预置任务文件
+  await fs.mkdir(path.join(home, 'tasks'), { recursive: true });
+  await fs.mkdir(path.join(home, 'logs'), { recursive: true });
 
+  // 注意：mergeConfig 为变参（后者覆盖前者），用例级 overrides 必须真正生效，
+  // 否则 maxConcurrent/maxQueue/limits.* 会被静默忽略，导致「假失败/假通过」。
   const config = validateConfig(
-    mergeConfig(defaultConfig(process.env), {
-      host: '127.0.0.1',
-      port: 0, // 系统分配，避免并行测试端口冲突
-      dshHome: home,
-      serverName: 'test-host',
-      workspaceAllowlist: [workspace],
-      defaultWorkspace: workspace,
-      dsh: {
-        node: process.execPath,
-        binPath: FAKE_DSH,
-        profile: 'headless',
-        version: '0.0.0-test',
-        discoverSessionId: false,
+    mergeConfig(
+      defaultConfig(process.env),
+      {
+        host: '127.0.0.1',
+        port: 0, // 系统分配，避免并行测试端口冲突
+        dshHome: home,
+        serverName: 'test-host',
+        workspaceAllowlist: [workspace],
+        defaultWorkspace: workspace,
+        dsh: {
+          node: process.execPath,
+          binPath: FAKE_DSH,
+          profile: 'headless',
+          version: '0.0.0-test',
+          discoverSessionId: false,
+        },
+        events: { heartbeatMs: 60 },
+        limits: { requestTimeoutMs: 3000, headersTimeoutMs: 2500, outputFlushMs: 20, outputFlushBytes: 64 },
+        log: { toConsole: false },
       },
-      events: { heartbeatMs: 60 },
-      limits: { requestTimeoutMs: 3000, headersTimeoutMs: 2500, outputFlushMs: 20, outputFlushBytes: 64 },
-      log: { toConsole: false },
-    }, overrides),
+      overrides,
+    ),
     { env: process.env },
   );
 
@@ -97,7 +106,7 @@ export async function startHarness(t, overrides = {}, { pair = true, recordArgv 
   });
 
   let token = null;
-  if (pair) token = await pairDevice(baseUrl, { deviceName: 'test-device', deviceId: 'device-uuid-0001' });
+  if (pair) token = await pairDevice(baseUrl, { deviceName: 'test-device', deviceId: '01234567-89ab-4cde-8f01-23456789abcd' });
 
   /** 记录到的子进程调用（argv/cwd/DSH_HOME）。 */
   const recorded = async () => {
@@ -127,7 +136,7 @@ export async function startHarness(t, overrides = {}, { pair = true, recordArgv 
 }
 
 /** 完成一次配对，返回明文令牌。 */
-export async function pairDevice(baseUrl, { deviceName = 'test-device', deviceId = 'device-uuid-0001' } = {}) {
+export async function pairDevice(baseUrl, { deviceName = 'test-device', deviceId = '01234567-89ab-4cde-8f01-23456789abcd' } = {}) {
   const open = await httpRequest(baseUrl, 'POST', '/api/v1/pair/open');
   if (open.status !== 200) throw new Error(`pair/open 失败：${open.status} ${open.text}`);
   const claim = await httpRequest(baseUrl, 'POST', '/api/v1/pair/claim', {
@@ -199,6 +208,21 @@ export function isAlive(pid) {
   } catch {
     return false;
   }
+}
+
+/**
+ * 找一个可用的非回环 IPv4（用于验证「pair/open 只允许回环」的真实 HTTP 路径）。
+ * 没有则返回 null，调用方跳过该用例。
+ * @returns {string|null}
+ */
+export function findLanIpv4() {
+  const interfaces = os.networkInterfaces();
+  for (const list of Object.values(interfaces)) {
+    for (const entry of list ?? []) {
+      if (!entry.internal && entry.family === 'IPv4' && !entry.address.startsWith('169.254.')) return entry.address;
+    }
+  }
+  return null;
 }
 
 /** 等待进程退出。 */

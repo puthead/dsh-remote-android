@@ -11,6 +11,6 @@
     "start": "node gateway.mjs serve",
     "pair": "node gateway.mjs pair",
     "devices": "node gateway.mjs devices list",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.mjs"
   }
 }

@@ -49,10 +49,15 @@ class PrefsStore(private val context: Context) {
     /** 当前配置的快照；未配置时返回 null。 */
     suspend fun current(): AppSettings? = settings.first()
 
-    /** deviceId 首次使用（含配对前探测）时生成并落库，保证配对与后续请求用同一个 id。 */
+    /**
+     * deviceId 首次使用时生成（小写 UUID v4 文本，裁定 A4），非法历史值直接重建。
+     *
+     * 校验而不是信任已有值：早期版本或手工写入的 id 不符合网关正则时，
+     * 配对会以 400 bad_request 失败，错误信息对用户毫无指向性。
+     */
     suspend fun deviceId(): String {
         val existing = read(KEY_DEVICE_ID)
-        if (!existing.isNullOrEmpty()) return existing
+        if (!existing.isNullOrEmpty() && ApiClient.isValidDeviceId(existing)) return existing
         val generated = UUID.randomUUID().toString()
         context.dataStore.edit { it[KEY_DEVICE_ID] = generated }
         return generated

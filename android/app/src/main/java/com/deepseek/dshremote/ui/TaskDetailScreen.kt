@@ -8,8 +8,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material3.Card
@@ -23,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -59,6 +61,7 @@ fun TaskDetailScreen(taskId: String, onBack: () -> Unit) {
     val task by viewModel.task.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val canceling by viewModel.canceling.collectAsStateWithLifecycle()
+    val deleting by viewModel.deleting.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
@@ -82,7 +85,7 @@ fun TaskDetailScreen(taskId: String, onBack: () -> Unit) {
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
@@ -130,7 +133,13 @@ fun TaskDetailScreen(taskId: String, onBack: () -> Unit) {
                 .padding(padding),
         ) {
             ConnectionBanner(connection)
-            task?.let { TaskHeader(it) }
+            task?.let {
+                TaskHeader(
+                    task = it,
+                    deleting = deleting,
+                    onDeleteOnServer = viewModel::deleteOnServer,
+                )
+            }
             OutputView(
                 output = task?.output.orEmpty(),
                 autoScroll = autoScroll,
@@ -143,7 +152,7 @@ fun TaskDetailScreen(taskId: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun TaskHeader(task: RemoteTask) {
+private fun TaskHeader(task: RemoteTask, deleting: Boolean, onDeleteOnServer: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -183,8 +192,9 @@ private fun TaskHeader(task: RemoteTask) {
                 )
             }
             if (task.truncated) {
+                // 裁定 A5：网关只保留尾部 1 MiB，必须显式告知，不能静默截断
                 Text(
-                    text = "网关标记输出已截断（超过上限）",
+                    text = "输出过长，仅显示最近 1 MiB",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary,
                 )
@@ -195,6 +205,20 @@ private fun TaskHeader(task: RemoteTask) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+            }
+            // 契约 §3.5：仅终态可删；活动态不显示入口，避免必然的 409 conflict
+            if (task.status.isTerminal) {
+                TextButton(onClick = onDeleteOnServer, enabled = !deleting) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = if (deleting) "删除中…" else "删除服务端记录",
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
             }
         }
     }

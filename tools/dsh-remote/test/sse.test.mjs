@@ -191,13 +191,21 @@ test('SSE：Last-Event-ID 请求头等价于 fromSeq 参数', async (t) => {
   await waitFor(() => all.state.events.some((e) => e.event === 'task.finished'), { message: '未收到终态' });
   const lastSeq = Math.max(...all.state.events.map((e) => e.data.seq));
   all.close();
+  await waitFor(() => h.gateway.stats().sseClients === 0);
+
+  // 断线期间产生新事件；重连时用 Last-Event-ID 头而不是 query 参数
+  const later = await h.request('POST', '/api/v1/tasks', { body: { prompt: scripted({ mode: 'echo', text: 'D', chunks: 1 }), workspace: h.workspace } });
+  await waitForTask(h, later.json.id);
 
   const resumed = openSse(h.baseUrl, '/api/v1/events', { token: h.token, headers: { 'Last-Event-ID': String(lastSeq) } });
   await resumed.ready;
-  await waitFor(() => resumed.state.events.length > 0, { message: 'Last-Event-ID 未生效' });
+  await waitFor(() => resumed.state.events.some((e) => e.event === 'task.finished' && e.data.taskId === later.json.id), {
+    message: 'Last-Event-ID 未生效（未补发缺失事件）',
+  });
   for (const ev of resumed.state.events) {
     assert.ok(ev.data.seq > lastSeq, `Last-Event-ID=${lastSeq} 之后不应再收到 seq=${ev.data.seq}`);
   }
+  assert.equal(resumed.state.events[0].data.seq, lastSeq + 1, '补发必须从断点之后第一条开始');
   resumed.close();
 });
 

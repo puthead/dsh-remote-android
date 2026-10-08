@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -58,16 +61,18 @@ import com.deepseek.dshremote.ui.vm.appViewModel
 fun SetupScreen(
     onDone: () -> Unit,
     onBack: (() -> Unit)? = null,
+    notice: String? = null,
+    onNoticeDismissed: () -> Unit = {},
 ) {
     val viewModel = appViewModel { SetupViewModel(Graph.repository) }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val focusManager = LocalFocusManager.current
 
     LaunchedEffect(ui.message) {
-        ui.message?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.consumeMessage()
-        }
+        // 只弹提示，不消费：下文的常驻状态条要继续显示同一条结果，
+        // 这样自动化（uiautomator）与用户都能稳定看到"刚才那一下到底有没有生效"
+        ui.message?.let { snackbarHostState.showSnackbar(it) }
     }
     LaunchedEffect(ui.savedTick) {
         if (ui.savedTick > 0) onDone()
@@ -80,7 +85,7 @@ fun SetupScreen(
                 navigationIcon = {
                     if (onBack != null) {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
                     }
                 },
@@ -104,6 +109,37 @@ fun SetupScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (notice != null) {
+                // 例如"设备令牌已失效，请重新配对"：这条提示跨越了强制导航，必须显式呈现
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
+                    ),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            text = notice,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 10.dp),
+                        )
+                        IconButton(onClick = onNoticeDismissed) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭提示")
+                        }
+                    }
+                }
+            }
 
             if (ui.isCleartext) {
                 CleartextWarning()
@@ -130,10 +166,36 @@ fun SetupScreen(
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = viewModel::probe, enabled = !ui.busy) {
-                    Text("仅探测连通性")
+                    Text("测试连接")
                 }
                 if (ui.busy) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+            }
+
+            // 常驻结果条：Snackbar 会自己消失，自动化测试和用户都可能错过
+            ui.message?.let { text ->
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (ui.isError) {
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
+                        } else {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        },
+                    ),
+                ) {
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (ui.isError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                    )
                 }
             }
 
@@ -163,7 +225,17 @@ fun SetupScreen(
                 label = { Text("6 位配对码") },
                 placeholder = { Text("482913") },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = ImeAction.Done,
+                ),
+                // 键盘上的"完成"直接触发配对：少一次拖动手势，也让自动化测试能纯键盘走完全流程
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        focusManager.clearFocus()
+                        viewModel.pair()
+                    },
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
             Button(

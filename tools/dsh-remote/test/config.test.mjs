@@ -37,6 +37,19 @@ test('mergeConfig：对象深合并、数组整体替换', () => {
   assert.deepEqual(merged.workspaceAllowlist, ['D:\\a']);
 });
 
+test('mergeConfig：变参合并（回归：多余的 patch 参数曾被静默忽略）', () => {
+  const merged = mergeConfig(
+    defaultConfig({}),
+    { maxConcurrent: 1, limits: { maxBodyBytes: 2048 } },
+    { maxQueue: 0, limits: { pairClaimPerMinute: 2 } },
+  );
+  assert.equal(merged.maxConcurrent, 1, '第一个 patch 必须生效');
+  assert.equal(merged.maxQueue, 0, '第二个 patch 必须生效（0 是合法值，不能被当作"未提供"）');
+  assert.equal(merged.limits.maxBodyBytes, 2048, '跨 patch 的嵌套字段应各自生效');
+  assert.equal(merged.limits.pairClaimPerMinute, 2);
+  assert.equal(merged.port, 8787, '未被覆盖的字段保持默认');
+});
+
 test('validateConfig：非法值必须抛出 ConfigError 且信息可读', () => {
   const cases = [
     [{ port: 70000 }, /port/],

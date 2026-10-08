@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createGateway } from '../lib/http.mjs';
 import { createLogger } from '../lib/util.mjs';
-import { httpRequest, makeSandbox, pairDevice, scripted, startHarness, waitForTask } from './helpers.mjs';
+import { httpRequest, makeSandbox, pairDevice, scripted, startHarness, waitFor, waitForTask } from './helpers.mjs';
 
 /** 在同一个 sandbox 上启动一个网关实例（模拟一次重启）。 */
 async function boot(config) {
@@ -30,7 +30,7 @@ test('重启后：任务历史与设备令牌仍在，旧令牌继续可用', as
   // 第一次启动：配对 + 跑一个任务
   const first = await boot(sandbox.config);
   opened.push(first);
-  const token = await pairDevice(first.baseUrl, { deviceName: 'Xiaomi 14', deviceId: 'dev-persist' });
+  const token = await pairDevice(first.baseUrl, { deviceName: 'Xiaomi 14', deviceId: '11111111-2222-4333-8444-555555555501' });
   const created = await httpRequest(first.baseUrl, 'POST', '/api/v1/tasks', {
     token,
     body: { prompt: scripted({ mode: 'echo', text: '重启前的结果', chunks: 2 }), workspace: sandbox.workspace },
@@ -90,7 +90,7 @@ test('重启恢复：中断的 running/queued 任务被标记为 failed 并说�
     await gateway.close().catch(() => {});
     await sandbox.cleanup();
   });
-  const token = await pairDevice(baseUrl, { deviceName: 'pc', deviceId: 'dev-restore' });
+  const token = await pairDevice(baseUrl, { deviceName: 'pc', deviceId: '11111111-2222-4333-8444-555555555502' });
 
   for (const id of [interrupted.id, queued.id]) {
     const res = await httpRequest(baseUrl, 'GET', `/api/v1/tasks/${id}`, { token });
@@ -122,7 +122,7 @@ test('启动清理：原子写残留的 .tmp 文件被删除，损坏的任务�
     '损坏文件必须被隔离重命名',
   );
 
-  const token = await pairDevice(baseUrl, { deviceName: 'pc', deviceId: 'dev-quarantine' });
+  const token = await pairDevice(baseUrl, { deviceName: 'pc', deviceId: '11111111-2222-4333-8444-555555555503' });
   const list = await httpRequest(baseUrl, 'GET', '/api/v1/tasks', { token });
   assert.equal(list.status, 200, '隔离后网关仍可正常工作');
   assert.equal(list.json.tasks.length, 0);
@@ -141,7 +141,14 @@ test('日志：包含任务 id、sessionId 与耗时，且不出现明文令牌/
   const files = (await fs.readdir(logDir)).filter((f) => f.endsWith('.log'));
   assert.equal(files.length, 1, '日志按天滚动为单文件');
   assert.match(files[0], /^gateway-\d{8}\.log$/, '日志文件名必须是 gateway-YYYYMMDD.log');
-  const text = await fs.readFile(path.join(logDir, files[0]), 'utf8');
+  // 任务状态先于日志写入内存，日志是随后追加的；这里轮询等待，避免读得过早导致假失败
+  const text = await waitFor(
+    async () => {
+      const content = await fs.readFile(path.join(logDir, files[0]), 'utf8');
+      return content.includes(`task finished id=${created.json.id}`) ? content : null;
+    },
+    { message: '日志未记录任务结束' },
+  );
 
   assert.ok(text.includes(`task started id=${created.json.id}`), '日志应记录任务开始');
   assert.ok(text.includes(`task finished id=${created.json.id}`), '日志应记录任务结束');
@@ -163,7 +170,7 @@ test('devices.json 只存哈希，且重启后哈希校验依然工作', async (
 
   const first = await boot(sandbox.config);
   opened.push(first);
-  const token = await pairDevice(first.baseUrl, { deviceName: 'Pixel', deviceId: 'dev-hash' });
+  const token = await pairDevice(first.baseUrl, { deviceName: 'Pixel', deviceId: '11111111-2222-4333-8444-555555555504' });
   const raw = await fs.readFile(sandbox.config.devicesFile, 'utf8');
   assert.ok(!raw.includes(token), 'devices.json 不得出现明文令牌');
   assert.ok(!raw.includes('dshr_'), 'devices.json 不得出现令牌前缀');

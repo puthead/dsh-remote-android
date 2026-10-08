@@ -19,18 +19,29 @@ import { TaskError, TaskManager } from './tasks.mjs';
 import { listWorkspaces, resolveWorkspace } from './workspace.mjs';
 import { createLogger, redactSecrets } from './util.mjs';
 
-/** 契约错误码 → HTTP 状态码。 */
+/**
+ * 契约错误码 → HTTP 状态码。
+ * `conflict`(409) 与 `payload_too_large`(413) 是契约 v1.1（A2 硬约束）新增的码：
+ * - A2-2 要求删除活动任务返回 409；
+ * - A2-b 要求请求体超限返回 413 payload_too_large。
+ * 二者是对 §0 错误码枚举的**追加**，不改动既有码语义。
+ */
 export const ERROR_STATUS = Object.freeze({
   unauthorized: 401,
   forbidden: 403,
   not_found: 404,
   bad_request: 400,
+  conflict: 409,
+  payload_too_large: 413,
   pairing_closed: 403,
   pairing_bad_code: 401,
   rate_limited: 429,
   busy: 429,
   internal: 500,
 });
+
+/** 设备 ID 必须是**小写** UUID（契约 v1.1 A2-3）。 */
+export const DEVICE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** 携带契约错误码的 HTTP 异常。 */
 export class HttpError extends Error {
@@ -134,6 +145,13 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
   server.headersTimeout = config.limits.headersTimeoutMs;
   server.keepAliveTimeout = 65_000;
   server.maxHeadersCount = 100;
+  // Node 默认每 30s 才巡检一次「请求/头部是否超时」，若不缩短巡检间隔，
+  // 配置的 requestTimeout（默认 30s）最坏会被拖到 60s 才生效 —— 这正是「防挂起」要避免的。
+  // 取超时值的 1/2（上限 1s，下限 50ms），保证超时后能及时回收连接。
+  server.connectionsCheckingInterval = Math.max(
+    50,
+    Math.min(1000, Math.floor(Math.min(config.limits.requestTimeoutMs, config.limits.headersTimeoutMs) / 2)),
+  );
 
   if (!config.authRequired) log.warn('警告：配置 authRequired=false，所有接口将不再校验设备令牌（仅建议本机调试使用）');
   if (loaded > 0) log.info(`已加载 ${loaded} 个设备令牌`);
@@ -143,8 +161,10 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     }`,
   );
 
-  // lastSeenAt 落盘节流：成功认证只改内存，由该定时器周期性持久化
+  // lastSeenAt 落盘节流：成功认证只改内存，由该定时器周期性持久化。
+  // 顺序很重要：先接受外部（CLI）对设备库的改动，再落盘，避免把 CLI 吊销的设备写回去。
   const flushTimer = setInterval(() => {
+    devices.reloadIfChangedSync();
     void devices.flush();
   }, 30_000);
   flushTimer.unref?.();
@@ -255,6 +275,12 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     const body = await readJsonBody(req);
     const code = normalizePairCode(body?.code);
     if (!code) throw new HttpError('bad_request', '缺少或非法的 code（必须是 6 位数字）');
+    // 契约 v1.1 A2-3：deviceId 必须是小写 UUID —— 它是"同设备重配对即吊销旧令牌"的唯一依据，
+    // 格式不受控会让该保证失效（大小写不一致会被当成两台设备）。
+    const deviceId = typeof body?.deviceId === 'string' ? body.deviceId : '';
+    if (!DEVICE_ID_RE.test(deviceId)) {
+      throw new HttpError('bad_request', 'deviceId 必须是客户端生成的小写 UUID，例如 8f3c1a2b-1111-4222-8333-444455556666');
+    }
 
     const result = pairing.claim(code);
     if (!result.ok) {
@@ -264,7 +290,7 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
 
     const { token, tokenId } = await devices.issue({
       deviceName: typeof body?.deviceName === 'string' ? body.deviceName : '未命名设备',
-      deviceId: typeof body?.deviceId === 'string' ? body.deviceId : null,
+      deviceId,
     });
     log.info(`配对成功 deviceName=${body?.deviceName ?? '未命名设备'} tokenId=${tokenId} ip=${ip}`);
     // 明文令牌仅在本次响应中出现一次
@@ -339,14 +365,16 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
 
   /** SSE 事件流（契约 §4）。 */
   function onEvents(req, res, url) {
-    if (sse.clients.size >= config.limits.maxSseClients) {
-      throw new HttpError('busy', `SSE 连接数已达上限（${config.limits.maxSseClients}）`);
-    }
     const taskId = url.searchParams.get('taskId') || null;
     const fromSeqParam = url.searchParams.get('fromSeq');
     const fromSeq = parseSeq(fromSeqParam ?? req.headers['last-event-id']);
 
+    // 先校验请求本身是否合法（未知任务 → 404），再判断容量：
+    // 这样客户端拿到的是准确的错误原因，而不是被容量问题掩盖的 429。
     if (taskId && !tasks.get(taskId)) throw new HttpError('not_found', `任务不存在：${taskId}`);
+    if (sse.clients.size >= config.limits.maxSseClients) {
+      throw new HttpError('busy', `SSE 连接数已达上限（${config.limits.maxSseClients}）`);
+    }
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -418,7 +446,7 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
       const size = Number(declared);
       if (Number.isFinite(size) && size > maxBytes) {
         // 不读取超大请求体：直接 413 并关闭连接
-        throw new HttpError('bad_request', `请求体超过上限 ${maxBytes} 字节`, { status: 413, headers: { Connection: 'close' } });
+        throw new HttpError('payload_too_large', `请求体超过上限 ${maxBytes} 字节`, { headers: { Connection: 'close' } });
       }
     }
     const chunks = [];
@@ -427,7 +455,7 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
       for await (const chunk of req) {
         total += chunk.length;
         if (total > maxBytes) {
-          throw new HttpError('bad_request', `请求体超过上限 ${maxBytes} 字节`, { status: 413, headers: { Connection: 'close' } });
+          throw new HttpError('payload_too_large', `请求体超过上限 ${maxBytes} 字节`, { headers: { Connection: 'close' } });
         }
         chunks.push(chunk);
       }
