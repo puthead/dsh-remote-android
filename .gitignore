@@ -27,6 +27,26 @@ deliverables/*.apk
 keystore/*.jks
 keystore/keystore.properties
 
+# ---- 侦察用临时抽取物（体积大，不入库） ----
+.dsh-frontend-ref/
+dsh-image-gen/
+
+# ---- 侦察现场：只保留可复跑的探针脚本，其余（工具链缓存/转储/会话转录）不入库 ----
+.probe/**
+!.probe/**/
+!.probe/**/*.mjs
+!.probe/**/*.ps1
+!.probe/**/*.md
+.proto-out/
+.proto-png/
+.chrome-profile/
+
+# ---- 本机临时转储（原始会话转录、基线输出、清盘日志；体积或隐私原因不入库） ----
+*.jsonl
+.baseline-*.txt
+.log-wire-full-test.txt
+clean-c-drive-admin.log
+
 # ---- 编辑器/系统 ----
 .vscode/
 Thumbs.db
