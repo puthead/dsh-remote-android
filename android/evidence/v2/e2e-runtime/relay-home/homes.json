@@ -1,0 +1,120 @@
+{
+  "version": 2,
+  "updatedAt": 1791477581550,
+  "homes": [
+    {
+      "homeId": "home_J2o6FWMXgJQ3T_Kr7VIKVw",
+      "homeName": "DESKTOP-E2E",
+      "homeTokenHash": "eccf2c0d6404c0364dc5dced04063a944fdc842463c44bd5d2b5d31e853d39d1",
+      "gatewayVersion": "relay-cli/2.0.0",
+      "createdAt": 1791471624815,
+      "updatedAt": 1791477581550,
+      "devices": [
+        {
+          "deviceId": "2d4d83f9-af21-4b31-85b5-ccc200ea32a6",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "f1585b9184999b8832c0b273a33fef68d38897ec2f086cf319bc294cf3f1ff45",
+          "tokenId": "tok_abd595e9bf5754e0",
+          "createdAt": 1791472329209,
+          "updatedAt": 1791472329209
+        },
+        {
+          "deviceId": "09eaa525-78e3-4ae1-a7c9-964c66d21f7e",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "80fa478dc1f47f27cd031a5c976dc7d47e0fb2a9b0e04b0ab2d2bab4615bce67",
+          "tokenId": "tok_f950cff6e4ba9155",
+          "createdAt": 1791472732226,
+          "updatedAt": 1791472732226
+        },
+        {
+          "deviceId": "8d3ff3d0-384f-43eb-b358-b6a8f79c5b50",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "96d7c560bc0180dbb5fee3364e656acb5733c4ab8ee4b5c83832837cca7ee4c1",
+          "tokenId": "tok_d83ddf48ea18dba9",
+          "createdAt": 1791473044856,
+          "updatedAt": 1791473044856
+        },
+        {
+          "deviceId": "50fac23e-c8a9-4021-a250-e735567d204b",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "03bc4ff79359f663f8f464b6b166854867b28362003f795fd81d729c00eaa28a",
+          "tokenId": "tok_ebf76402ef73875d",
+          "createdAt": 1791473487931,
+          "updatedAt": 1791473487931
+        },
+        {
+          "deviceId": "19e32676-e379-4a6b-96e7-17f82b2be071",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "30321824d3b1df8d1db17a1b4369ad329908e28800ed262a9a9b7f4dcb6382e2",
+          "tokenId": "tok_ef354ca5b30da48f",
+          "createdAt": 1791473621547,
+          "updatedAt": 1791473621547
+        },
+        {
+          "deviceId": "864eaf5e-4ce4-4ecd-9d2e-e2524c0eec5c",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "ef38657487a3beb55a1ba4db10b5e4e2c8baae56036e93bb2702c209571ca85d",
+          "tokenId": "tok_7d51acd195728e2b",
+          "createdAt": 1791473767282,
+          "updatedAt": 1791473767282
+        },
+        {
+          "deviceId": "18d47a15-fe29-4e37-98f2-6760ad26ca29",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "055d7410a39b3023b7e4e23b3b01236d8102c1e50d6eeaa59db8d87c7b5b2e56",
+          "tokenId": "tok_be501019ef2026d1",
+          "createdAt": 1791473904862,
+          "updatedAt": 1791473904862
+        },
+        {
+          "deviceId": "a977c6c2-97c6-45ee-bf8c-03fb5921009a",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "b560cb99f1f005b52610a73c7e1c851cb93c2bb7d505e4f7363ac985cbb27ed7",
+          "tokenId": "tok_8e69e69aae8d340f",
+          "createdAt": 1791474125626,
+          "updatedAt": 1791474125626
+        },
+        {
+          "deviceId": "19e7187b-450e-4dd0-a8a8-d441e2c82b20",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "f185f4a980e54f57226847e30c319ba76e3ae66b0eb337f6fbba9d699a8678f5",
+          "tokenId": "tok_ddc99ad0f5527ad2",
+          "createdAt": 1791474504447,
+          "updatedAt": 1791474504447
+        },
+        {
+          "deviceId": "0adff756-07ab-43fb-a0fa-98bedb0101b6",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "76f204803656c35407bc5de2e4036049835b6120265b6b01273e97248e203393",
+          "tokenId": "tok_1c1dbabcae212917",
+          "createdAt": 1791474910800,
+          "updatedAt": 1791474910800
+        },
+        {
+          "deviceId": "e13d7eb7-4151-4c4a-930c-06f2bf0d9b4a",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "fdd3305f1d9c00de02842234550859f1a1db06efa3970502b0241e43986788b2",
+          "tokenId": "tok_6990288936bc999d",
+          "createdAt": 1791475463765,
+          "updatedAt": 1791475463765
+        },
+        {
+          "deviceId": "2cee3bac-ee1a-4d1f-ac08-0beea1d2f776",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "72c4627fcf330f33f574e2ab819ac3d0eb6af262dcc4a7efe98efcd758d280c0",
+          "tokenId": "tok_f3157f66562f3ad4",
+          "createdAt": 1791477332829,
+          "updatedAt": 1791477332829
+        },
+        {
+          "deviceId": "f00c1156-8aa9-4edb-a499-ab845df8060d",
+          "deviceName": "sdk_gphone64_x86_64",
+          "deviceTokenHash": "c0af81329eaa7406b7bae3444d1f6e5f5b0703726bfd6f26c5e6cb7bc50e90ab",
+          "tokenId": "tok_a64ee5885053b229",
+          "createdAt": 1791477581550,
+          "updatedAt": 1791477581550
+        }
+      ]
+    }
+  ]
+}

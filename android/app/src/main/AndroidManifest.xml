@@ -9,6 +9,15 @@
     <!-- Android 13+ 通知需要运行时授权；未授权时仅"没有通知"，SSE 保活不受影响 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 只用于"拍一张照片发过去"。相册选图走 Photo Picker（无需任何存储权限），
+         所以这里刻意不加 READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE：
+         能少要一个危险权限就少要一个，被拒概率和上架审核成本都更低。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 没有相机的设备（部分平板/模拟器）也应能装：相机入口在运行时再判断 -->
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+
     <application
         android:name=".DshRemoteApp"
         android:allowBackup="false"
@@ -17,7 +26,6 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.DshRemote"
-        android:usesCleartextTraffic="true"
         tools:targetApi="34">
 
         <activity
@@ -31,11 +39,28 @@
             </intent-filter>
         </activity>
 
-        <!-- 数据同步型前台服务：保住 SSE 长连接，退到后台仍能持续收流 -->
+        <!-- 数据同步型前台服务：保住中继隧道与 SSE 长流，退到后台仍能持续收流 -->
         <service
-            android:name=".service.SseForegroundService"
+            android:name=".service.RelayForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 拍照落盘的中转站。ACTION_IMAGE_CAPTURE 要求调用方给一个可写的 file:// 或 content://
+             URI，而 file:// 从 N 起会抛 FileUriExposedException，所以必须走 FileProvider：
+             authority 用 ${applicationId} 而不是硬编码包名，debug 变体带了 .debug 后缀（见
+             app/build.gradle.kts 的 applicationIdSuffix），硬编码会让 debug 包拿到一个
+             和系统里注册的对不上的 authority，一拍照就 IllegalArgumentException。
+             exported=false + grantUriPermissions=true：只有拿着我们临时授权的那个相机 App 能读，
+             其余应用一律读不到。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

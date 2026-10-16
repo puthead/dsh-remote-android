@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  内网直连场景需要明文 HTTP：网关监听 0.0.0.0:8787 且默认不带证书。
-  风险：同一局域网内任何人可嗅探/篡改流量，令牌与任务内容都可能被窃取。
-  因此这里只放开明文，不做证书固定、不信任用户自签 CA；跨公网请改用 Tailscale / frp+TLS，
-  或把 baseUrl 换成 https:// 并让网关置于 TLS 反向代理之后（见部署手册）。
+  **release 变体**：禁止明文，只允许 wss://（契约 §5.6）。
+
+  手机在 v2 里只连中继；生产形态是中继终止 TLS，因此 release 包没有任何理由放开明文。
+  debug 变体覆盖同名资源（app/src/debug/res/xml/network_security_config.xml），
+  只在开发/联调时允许 ws://，并在 UI 上强制显示风险提示卡。
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

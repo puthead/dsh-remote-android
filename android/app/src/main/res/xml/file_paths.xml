@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 的可见范围：只暴露 cache/camera/ 一个目录。
+
+  为什么是 cacheDir 而不是 filesDir / 外部存储：
+  - 拍摄的原图只是"待发送的中转文件"，发完即弃；放 cache 让系统在空间紧张时替我们回收，
+    不用自己写清理逻辑，也不会在用户手机上越攒越多。
+  - 不用 Environment.getExternalStorageDirectory()：Android 10+ 分区存储下拿到的是
+    app-specific 目录，且一旦声明外部路径就要考虑存储权限与 scoped storage 兼容；
+    cacheDir 在所有受支持版本上行为一致（minSdk 26）。
+  路径中的 path="camera/" 是相对 cacheDir 的子目录，必须与拍照代码里
+  File(context.cacheDir, "camera") 拼出来的真实路径完全一致，否则相机写入时
+  FileProvider 会以 IllegalArgumentException: Failed to find configured root 拒绝。
+-->
+<paths>
+    <cache-path
+        name="camera"
+        path="camera/" />
+</paths>

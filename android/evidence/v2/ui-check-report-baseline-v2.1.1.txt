@@ -1,0 +1,98 @@
+DSH Remote v2 · Android 真机 UI 检查报告
+时间：2026-10-09 00:35:10
+设备：emulator-5554   中继（夹具）：ws://10.0.2.2:9543   包：com.deepseek.dshremote.debug
+通过 69 / 共 69
+
+[PASS] ADB 设备在线 — serial=emulator-5554
+[PASS] 夹具脚本存在 — D:\Workspace\dsh_android\android\evidence\v2\mock-tunnel.mjs
+[PASS] APK 存在 — D:\Workspace\dsh_android\android\app\build\outputs\apk\debug\app-debug.apk
+[PASS] 夹具中继可达 — http://127.0.0.1:9543/health
+[PASS] APK 安装 — Performing Streamed Install Success
+[PASS] 配对页已渲染 — 未配对时应进入配对页
+[PASS] 截图 00-pairing — 198740 字节
+[PASS] 明文风险提示卡已出现 — 期望界面包含「明文 ws://」
+[PASS] 示例配对码已填入 — 期望界面包含「482913」
+[PASS] 截图 01-pairing-filled — 282538 字节
+[PASS] 配对成功并进入主界面 — 底部导航出现「电脑会话」
+[PASS] 列表副标题说明"只读镜像" — 期望界面包含「镜像会话」
+[PASS] 会话标题（中文）正常渲染 — 期望界面包含「远程控制台开发」
+[PASS] 运行中会话显示 live 文案 — 期望界面包含「电脑端正在驱动」
+[PASS] 改动计数来自会话元数据 — 期望界面包含「改动 7 个文件」
+[PASS] 截图 02-sessions-computer — 192160 字节
+[PASS] 助手消息已渲染 — 期望界面包含「助手」
+[PASS] 电脑会话详情显示只读说明 — 期望界面包含「该会话正由电脑端驱动」
+[PASS] 工具调用卡片（含名称）已渲染 — 期望界面包含「pwsh」
+[PASS] 截图 03-conversation — 354045 字节
+[PASS] isError 工具卡展开后标注"结果（错误）" — 期望界面包含「结果（错误）」
+[PASS] 展开后显示参数区 — 期望界面包含「参数」
+[PASS] 截图 04-tool-call-expanded — 341953 字节
+[PASS] 待办列表（todo 工具投影）已显示 — 期望界面包含「待办」
+[PASS] 截图 05-conversation-todos — 342025 字节
+[PASS] 工作区名已渲染 — 期望界面包含「dsh_android」
+[PASS] 根目录条目已渲染 — 期望界面包含「README.md」
+[PASS] 「文件 / 改动 / 搜索」标签页已渲染 — 期望界面包含「文件」
+[PASS] 截图 06-workspace-root — 119789 字节
+[PASS] 进入 android 目录后条目已渲染 — 期望界面包含「BUILD.md」
+[PASS] 目录导航（返回上级）可用 — 期望界面包含「返回上级」
+[PASS] 截图 07-workspace-files — 127830 字节
+[PASS] git 分支信息已渲染 — 期望界面包含「分支 main」
+[PASS] 改动分组标题 — 期望界面包含「已跟踪改动」
+[PASS] 改动文件条目 — 期望界面包含「RelayClient.kt」
+[PASS] 截图 08-workspace-changes — 200293 字节
+[PASS] unified diff 已渲染 — 期望界面包含「diff --git」
+[PASS] diff 新增行（绿底）已渲染 — 期望界面包含「nextDelayMs」
+[PASS] diff hunk 头已渲染 — 期望界面包含「@@」
+[PASS] 截图 09-diff — 308921 字节
+[PASS] 手机任务页说明"可续聊" — 期望界面包含「可续聊」
+[PASS] 手机任务列表渲染 — 期望界面包含「手机任务：跑一遍单元测试」
+[PASS] 截图 10-phone-tasks — 144135 字节
+[PASS] 手机任务详情已打开 — 期望界面包含「条消息」
+[PASS] 截图 11-phone-conversation — 147555 字节
+[PASS] 流式渲染中（delta 累加） — 期望界面包含「生成中」
+[PASS] 截图 12-phone-streaming — 216214 字节
+[PASS] 轮次里的工具调用卡片（tool.call/tool.result） — 期望界面包含「pwsh」
+[PASS] 截图 13-phone-turn-done — 218591 字节
+[PASS] 停止按钮有二次确认且写明后果 — 期望界面包含「停止后本会话无法继续」
+[PASS] 截图 14-stop-confirm — 257366 字节
+[PASS] 停止后输入框灰化并给出说明 — 期望界面包含「本会话已停止，无法继续」
+[PASS] 截图 15-phone-task-stopped — 252000 字节
+[PASS] 新建任务对话框已打开 — 期望界面包含「新建手机任务」
+[PASS] 截图 16-create-phone-task — 272748 字节
+[PASS] 中继地址输入框 — 期望界面包含「中继地址」
+[PASS] 明文风险提示卡 — 期望界面包含「当前中继地址是明文」
+[PASS] 截图 17-settings-top — 258664 字节
+[PASS] 令牌吊销入口 — 期望界面包含「吊销本机令牌」
+[PASS] 日志导出入口 — 期望界面包含「导出日志」
+[PASS] 令牌加密存储状态可见 — 期望界面包含「令牌已用 Android Keystore 加密存储」
+[PASS] v2 能力判定说明（契约 §4.5） — 期望界面包含「supportedApiVersions」
+[PASS] 截图 18-settings-bottom — 266205 字节
+[PASS] 手机显示"电脑离线" — 收到 notice home_offline 后状态条变为离线
+[PASS] 截图 19-computer-offline — 200761 字节
+[PASS] 恢复在线后状态条回到"已连接" — notice home_online 生效
+[PASS] 截图 20-recovered-online — 193559 字节
+[PASS] 缺 relay 块时给出指向 PC 配置的提示 — 期望界面包含「该电脑未启用中继」
+[PASS] 截图 21-legacy-gateway — 309747 字节
+
+截图：
+  00-pairing.png  (198740 字节)
+  01-pairing-filled.png  (282538 字节)
+  02-sessions-computer.png  (192160 字节)
+  03-conversation.png  (354045 字节)
+  04-tool-call-expanded.png  (341953 字节)
+  05-conversation-todos.png  (342025 字节)
+  06-workspace-root.png  (119789 字节)
+  07-workspace-files.png  (127830 字节)
+  08-workspace-changes.png  (200293 字节)
+  09-diff.png  (308921 字节)
+  10-phone-tasks.png  (144135 字节)
+  11-phone-conversation.png  (147555 字节)
+  12-phone-streaming.png  (216214 字节)
+  13-phone-turn-done.png  (218591 字节)
+  14-stop-confirm.png  (257366 字节)
+  15-phone-task-stopped.png  (252000 字节)
+  16-create-phone-task.png  (272748 字节)
+  17-settings-top.png  (258664 字节)
+  18-settings-bottom.png  (266205 字节)
+  19-computer-offline.png  (200761 字节)
+  20-recovered-online.png  (193559 字节)
+  21-legacy-gateway.png  (309747 字节)

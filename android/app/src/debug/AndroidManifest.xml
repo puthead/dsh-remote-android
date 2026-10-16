@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  **debug 变体专用清单**：开发/联调需要明文 ws://。
+
+  release 变体不合并这份清单，因此：
+  - `usesCleartextTraffic` 在 release 下保持系统默认（false）；
+  - 网络安全配置在 release 下取 main 里的 `cleartextTrafficPermitted="false"`。
+  这正是契约 §5.6 的要求：明文只在 debug 放开，release 走 wss://。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:usesCleartextTraffic="true"
+        tools:targetApi="34" />
+
+</manifest>

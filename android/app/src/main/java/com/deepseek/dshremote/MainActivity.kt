@@ -1,6 +1,7 @@
 package com.deepseek.dshremote
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -27,10 +28,34 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Graph.init(applicationContext)
+        seedDebugAutomation(intent)
         setContent {
             DshRemoteTheme {
                 DshRemoteRoot(onRequestNotificationPermission = ::ensureNotificationPermission)
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        seedDebugAutomation(intent)
+    }
+
+    /**
+     * 仅 debug 变体：允许用启动参数注入"填入示例"要用的中继地址/配对码，
+     * 让真机自动化不必依赖中文输入法（BUILD.md §7.3）。release 不读这些 extra。
+     */
+    private fun seedDebugAutomation(intent: Intent?) {
+        if (!BuildConfig.DEBUG || intent == null) return
+        intent.getStringExtra(EXTRA_RELAY_URL)?.takeIf { it.isNotBlank() }?.let {
+            DebugSeeds.relayUrl = it.trim()
+            Logger.i(TAG, "debug 自动化种子：中继地址=${it.trim()}")
+        }
+        intent.getStringExtra(EXTRA_PAIR_CODE)?.takeIf { it.length == 6 }?.let {
+            DebugSeeds.pairCode = it
+        }
+        intent.getStringExtra(EXTRA_TASK_PROMPT)?.takeIf { it.isNotBlank() }?.let {
+            DebugSeeds.taskPrompt = it
         }
     }
 
@@ -46,5 +71,14 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val TAG = "MainActivity"
+
+        /** debug 自动化用：`--es dsh_relay_url ws://10.0.2.2:9543`。 */
+        const val EXTRA_RELAY_URL = "dsh_relay_url"
+
+        /** debug 自动化用：`--es dsh_pair_code 482913`。 */
+        const val EXTRA_PAIR_CODE = "dsh_pair_code"
+
+        /** debug 自动化用：`--es dsh_task_prompt "reply OK"`（真机联调要便宜的 prompt）。 */
+        const val EXTRA_TASK_PROMPT = "dsh_task_prompt"
     }
 }

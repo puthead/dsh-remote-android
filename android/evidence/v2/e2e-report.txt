@@ -1,0 +1,90 @@
+DSH Remote v2 · Android × 真实中继 × 真实网关 端到端报告
+时间：2026-10-09 00:41:30
+设备：emulator-5554   中继：ws://10.0.2.2:9643（真实 relay.mjs）   网关：127.0.0.1:8887（真实 gateway.mjs）
+配对码：973897
+运行目录：D:\Workspace\dsh_android\android\evidence\v2\e2e-runtime（隔离 home，未污染真实会话）
+通过 41 / 失败 0 / 跳过 0 / 共 41
+失败分类：FAIL(产品缺陷) = App/网关/中继功能问题；FAIL(环境或夹具) = SDK/凭据/端口等环境问题；SKIP(environment) = 环境不满足、未验证
+前台恢复次数：1（App 掉前台后被拉回；>0 说明过程中出现过环境抖动）
+
+警告 1 条（不影响判定，供人工复核）：
+  ! 截图 real-relay-14-relay-restarted（261281 字节）与 real-relay-13-gateway-restarted 尺寸接近：可能是同一界面，建议人工复核
+
+[PASS] ADB 设备在线 — serial=emulator-5554
+[PASS] 真实中继脚本存在 — D:\Workspace\dsh_android\tools\dsh-relay\relay.mjs
+[PASS] 真实网关脚本存在 — D:\Workspace\dsh_android\tools\dsh-remote\gateway.mjs
+[PASS] APK 存在 — D:\Workspace\dsh_android\android\app\build\outputs\apk\debug\app-debug.apk
+[PASS] 网关预检：v2 路由与能力宣告可用 — {"ok":true,"apiVersion":1,"supportedApiVersions":[1,2],"gatewayVersion":"2.0.0","serverName":"WIN-4FSO92IHDIN","dshVersion":"0.1.0-rc.7","uptimeMs":218,"activeTasks":0,"queuedTasks":0,"pairingOpen":false,"authRequired":true,"capabilities":["tasks","events","pairing","workspaces","cancel","sessions","session.transcript","session.events","session.turns","session.abort","session.stream","workspace.files","workspace.file","workspace.changes","workspace.diff","workspace.search","relay","relay.pairing"],"sessionMirror":{"enabled":true,"onlyAllowlistedWorkspaces":false,"liveWindowMs":60000,"roots":[{"source":"phone","home":"D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\gateway-home\\dsh-home","writable":true,"label":"手机任务会话"},{"source":"computer","home":"C:\\Users\\Administrator\\.dsh","writable":false,"label":"电脑端会话（只读镜像）"}]},"sessionRunner":{"runtimes":0,"activeTurns":0,"exhausted":0,"launchSource":"launcher:D:\\DSH\\resources\\runtime\\cli\\bin\\dsh.cmd","launcher":"D:\\DSH\\DeepSeek Harness.exe","supportsSdk":true,"sessionsHome":"D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\gateway-home\\dsh-home","runtimesDetail":[]},"relay":{"enabled":true,"connected":true,"homeId":"home_J2o6FWMXgJQ3T_Kr7VIKVw","relayName":null,"url":"ws://127.0.0.1:9643","lastError":null,"since":1791477566785,"reconnects":0,"attempts":0,"inFlight":0,"idBase":1099511627776,"stats":{"framesIn":2,"framesOut":1,"requests":0,"streams":0,"aborted":0,"errors":0}},"sessionsCached":0}
+[PASS] 网关隧道已连上中继 — HTTP 200
+{
+  "ok": true,
+  "enabled": true,
+  "connected": true,
+  "homeId": "home_J2o6FWMXgJQ3T_Kr7VIKVw",
+  "relayName": null,
+  "url": "ws://127.0.0.1:9643",
+  "lastError": null,
+  "since": 1791477566785,
+  "reconnects": 0,
+  "attempts": 0,
+  "inFlight": 0,
+  "idBase": 1099511627776,
+  "stats": {
+    "framesIn": 2,
+    "framesOut": 1,
+    "requests": 0,
+    "streams": 0,
+    "aborted": 0,
+    "errors": 0
+  }
+}
+[PASS] 网关已生成配对码 — code=973897
+[PASS] APK 安装 — Performing Streamed Install Success
+[PASS] 截图 real-relay-01-pairing — 198869 字节
+[PASS] 配对码已填入（来自真实网关） — 期望界面包含「973897」
+[PASS] 真实配对成功（中继 + 网关 + 真实 WebSocket 隧道） — 进入主界面
+[PASS] 会话列表副标题 — 期望界面包含「镜像会话」
+[PASS] 真实会话镜像有数据 — 含 turn 统计的会话卡：3 个
+[PASS] 截图 real-relay-02-sessions — 267536 字节
+[PASS] 会话详情顶部显示消息数（真实 transcript） — 期望界面包含「条消息」
+[PASS] 真实工具调用卡片 — 命中「pwsh」
+[PASS] 截图 real-relay-03-conversation — 404969 字节
+[PASS] 工作区名 — 期望界面包含「dsh_android」
+[PASS] 真实目录条目 README.md — 期望界面包含「README.md」
+[PASS] 截图 real-relay-05-workspace — 133696 字节
+[PASS] 真实 git 分支 — 期望界面包含「分支 main」
+[PASS] 真实改动列表（git status） — 已跟踪=True 未跟踪=False 徽标节点=26
+[PASS] 截图 real-relay-06-changes — 311873 字节
+[PASS] 真实 unified diff 页已打开 — 期望界面包含「git ·」
+[PASS] 截图 real-relay-07-diff — 599946 字节
+[PASS] 手机任务页 — 期望界面包含「可续聊」
+[PASS] 截图 real-relay-08-phone-tasks — 207285 字节
+[PASS] 新建任务对话框 — 期望界面包含「新建手机任务」
+[PASS] 截图 real-relay-09-create-task — 191783 字节
+[PASS] 真实手机任务已创建并进入列表 — 列表空状态消失，新任务出现（真实 SDK profile 轮次）
+[PASS] 截图 real-relay-10-phone-task-created — 71701 字节
+[PASS] 真实 SDK 轮次的输出经 SSE 到达手机 — 对话流里出现助手消息
+[PASS] 截图 real-relay-11-phone-task-streaming — 183594 字节
+[PASS] 停掉网关后手机显示"电脑离线" — 收到 notice home_offline
+[PASS] 截图 real-relay-12-computer-offline — 298662 字节
+[PASS] 网关预检：v2 路由与能力宣告可用 — {"ok":true,"apiVersion":1,"supportedApiVersions":[1,2],"gatewayVersion":"2.0.0","serverName":"WIN-4FSO92IHDIN","dshVersion":"0.1.0-rc.7","uptimeMs":224,"activeTasks":0,"queuedTasks":0,"pairingOpen":false,"authRequired":true,"capabilities":["tasks","events","pairing","workspaces","cancel","sessions","session.transcript","session.events","session.turns","session.abort","session.stream","workspace.files","workspace.file","workspace.changes","workspace.diff","workspace.search","relay","relay.pairing"],"sessionMirror":{"enabled":true,"onlyAllowlistedWorkspaces":false,"liveWindowMs":60000,"roots":[{"source":"phone","home":"D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\gateway-home\\dsh-home","writable":true,"label":"手机任务会话"},{"source":"computer","home":"C:\\Users\\Administrator\\.dsh","writable":false,"label":"电脑端会话（只读镜像）"}]},"sessionRunner":{"runtimes":0,"activeTurns":0,"exhausted":0,"launchSource":"launcher:D:\\DSH\\resources\\runtime\\cli\\bin\\dsh.cmd","launcher":"D:\\DSH\\DeepSeek Harness.exe","supportsSdk":true,"sessionsHome":"D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\gateway-home\\dsh-home","runtimesDetail":[]},"relay":{"enabled":true,"connected":true,"homeId":"home_J2o6FWMXgJQ3T_Kr7VIKVw","relayName":null,"url":"ws://127.0.0.1:9643","lastError":null,"since":1791477662924,"reconnects":0,"attempts":0,"inFlight":0,"idBase":1099511627776,"stats":{"framesIn":2,"framesOut":1,"requests":0,"streams":0,"aborted":0,"errors":0}},"sessionsCached":0}
+[PASS] 网关重启后手机自动恢复 — 状态条回到"已连接"（App 退避重连，无需人工干预）
+[PASS] 截图 real-relay-13-gateway-restarted — 261231 字节
+[PASS] 重启中继后手机自动恢复（无需人工干预） — 状态条回到"已连接"
+[PASS] 截图 real-relay-14-relay-restarted — 261281 字节
+[PASS] 网关隧道随中继重启自动重连（退避重试，轮询等待） — connected=true（轮询等待内恢复）
+
+截图：
+  real-relay-01-pairing.png  (198869 字节)
+  real-relay-02-sessions.png  (267536 字节)
+  real-relay-03-conversation.png  (404969 字节)
+  real-relay-05-workspace.png  (133696 字节)
+  real-relay-06-changes.png  (311873 字节)
+  real-relay-07-diff.png  (599946 字节)
+  real-relay-08-phone-tasks.png  (207285 字节)
+  real-relay-09-create-task.png  (191783 字节)
+  real-relay-10-phone-task-created.png  (71701 字节)
+  real-relay-11-phone-task-streaming.png  (183594 字节)
+  real-relay-12-computer-offline.png  (298662 字节)
+  real-relay-13-gateway-restarted.png  (261231 字节)
+  real-relay-14-relay-restarted.png  (261281 字节)

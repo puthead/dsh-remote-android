@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  **debug 变体**：开发/联调必须能连 `ws://`（中继未配 TLS 时的形态）。
+
+  覆盖 main 里的同名资源；release 仍然禁止明文（契约 §5.6）。
+  风险由 UI 承担：地址是 ws:// 时设置页/配对页会显示"明文风险提示卡"。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -1,0 +1,122 @@
+DSH Remote v2 · Android 真机 UI 检查报告
+时间：2026-10-16 22:10:49
+设备：emulator-5554   中继（夹具）：ws://10.0.2.2:9543   包：com.deepseek.dshremote.debug
+通过 80 / 共 80
+
+[PASS] ADB 设备在线 — serial=emulator-5554
+[PASS] 夹具脚本存在 — D:\Workspace\dsh_android\android\evidence\v2\mock-tunnel.mjs
+[PASS] APK 存在 — D:\Workspace\dsh_android\android\app\build\outputs\apk\debug\app-debug.apk
+[PASS] 夹具中继可达 — http://127.0.0.1:9543/health
+[PASS] APK 安装 — Performing Streamed Install Success
+[PASS] 配对页已渲染 — 未配对时应进入配对页
+[PASS] 截图 00-pairing — 187538 字节
+[PASS] 明文风险提示卡已出现 — 期望界面包含「明文 ws://」
+[PASS] 示例配对码已填入 — 期望界面包含「482913」
+[PASS] 截图 01-pairing-filled — 226809 字节
+[PASS] 配对成功并进入主界面 — 底部导航出现「电脑会话」
+[PASS] 电脑会话页页头 — 期望界面包含「DSH 远程」
+[PASS] 会话标题（中文）正常渲染 — 期望界面包含「远程控制台开发」
+[PASS] 运行中会话显示呼吸点状态胶囊 — 期望界面包含「运行中」
+[PASS] 不可写会话显示"只读"而非"可续聊" — 期望界面包含「只读」
+[PASS] 改动计数来自会话元数据（行内元信息 3 轮 · 7 个文件） — 期望界面包含「7 个文件」
+[PASS] 截图 02-sessions-computer — 206859 字节
+[PASS] 助手消息（工具调用）已渲染 — 期望界面包含「write_todos」
+[PASS] 电脑会话详情显示只读横幅 — 期望界面包含「只读会话 · 无法从手机发送消息」
+[PASS] 工具调用卡片（含名称）已渲染 — 期望界面包含「pwsh」
+[PASS] 截图 03-conversation — 346919 字节
+[PASS] 展开错误工具卡后显示失败原因（ENOENT） — 期望界面包含「ENOENT」
+[PASS] isError 工具卡展开态已生效（切换标签变「收起」） — 期望界面包含「收起」
+[PASS] 截图 04-tool-call-expanded — 362391 字节
+[PASS] 待办列表（todo 工具投影）已显示 — 期望界面包含「任务清单」
+[PASS] 截图 05-conversation-todos — 362088 字节
+[PASS] 工作区名已渲染 — 期望界面包含「dsh_android」
+[PASS] 根目录条目已渲染 — 期望界面包含「README.md」
+[PASS] 「文件 / 改动 / 搜索」标签页已渲染 — 期望界面包含「文件」
+[PASS] 截图 06-workspace-root — 131381 字节
+[PASS] 进入 android 目录后条目已渲染 — 期望界面包含「BUILD.md」
+[PASS] 目录导航（返回上级）可用 — 期望界面包含「返回上级」
+[PASS] 截图 07-workspace-files — 143236 字节
+[PASS] git 分支信息已渲染 — 期望界面包含「main」
+[PASS] 改动分组标题 — 期望界面包含「已跟踪改动」
+[PASS] 未跟踪分组标题 — 期望界面包含「未跟踪文件」
+[PASS] 改动文件条目 — 期望界面包含「RelayClient.kt」
+[PASS] 改动页 diff 预览已渲染（不在滚动容器里嵌套滚动） — 期望界面包含「@@」
+[PASS] 截图 08-workspace-changes — 233140 字节
+[PASS] unified diff 已渲染 — 期望界面包含「diff --git」
+[PASS] diff 新增行（绿底）已渲染 — 期望界面包含「nextDelayMs」
+[PASS] diff hunk 头已渲染 — 期望界面包含「@@」
+[PASS] 截图 09-diff — 321778 字节
+[PASS] 手机任务列表渲染 — 期望界面包含「手机任务：跑一遍单元测试」
+[PASS] 任务档位胶囊（TaskStatusPill）仍在 — 期望界面包含「已完成」
+[PASS] 截图 10-phone-tasks — 243642 字节
+[PASS] 手机任务详情已打开 — 期望界面包含「条消息」
+[PASS] 截图 11-phone-conversation — 202655 字节
+[PASS] 打开「更多」菜单填示例 — 已从「更多」菜单点击「填入示例」
+[PASS] 流式渲染中（已受理并等待模型输出） — 期望界面包含「等待模型输出」
+[PASS] 流式渲染中（对话流末端轮次芯片） — 期望界面包含「轮进行中」
+[PASS] 截图 12-phone-streaming — 287825 字节
+[PASS] 轮次里的工具调用卡片（tool.call/tool.result） — 期望界面包含「pwsh」
+[PASS] 截图 13-phone-turn-done — 288096 字节
+[PASS] 打开「更多」菜单填示例 — 已从「更多」菜单点击「填入示例」
+[PASS] 停止按钮有二次确认且写明后果 — 期望界面包含「停止后本会话无法继续」
+[PASS] 截图 14-stop-confirm — 241229 字节
+[PASS] 停止后输入框灰化并给出说明 — 期望界面包含「本会话已停止，无法继续」
+[PASS] 截图 15-phone-task-stopped — 336416 字节
+[PASS] 新建任务屏已打开（页头） — 期望界面包含「新建任务」
+[PASS] 创建屏本身是对话界面（空态说明） — 期望界面包含「还没有消息」
+[PASS] 创建屏里能选工作区 — 期望界面包含「工作区」
+[PASS] 创建屏里能选执行位置与权限档 — 期望界面包含「在哪执行 · 权限」
+[PASS] 示例内容落在创建屏自己的输入框里 — 期望界面包含「在本工作区里跑一遍 android 模块的单元测试」
+[PASS] 截图 16-create-phone-task — 264853 字节
+[PASS] 中继地址输入框 — 期望界面包含「中继地址」
+[PASS] 明文风险提示卡 — 期望界面包含「当前中继地址是明文」
+[PASS] 截图 17-settings-top — 277333 字节
+[PASS] 令牌吊销入口 — 期望界面包含「吊销本机令牌」（下滑 1 屏后命中）
+[PASS] 日志导出入口 — 期望界面包含「导出自检日志」（下滑 0 屏后命中）
+[PASS] 崩溃记录入口可见 — 期望界面包含「崩溃记录」（下滑 0 屏后命中）
+[PASS] 令牌加密存储状态可见 — 期望界面包含「令牌已用 Android Keystore 加密存储」（下滑 1 屏后命中）
+[PASS] v2 能力判定说明（契约 §4.5） — 期望界面包含「网关能力」（下滑 0 屏后命中）
+[PASS] 截图 18-settings-bottom — 206493 字节
+[PASS] 手机显示"电脑离线" — 收到 notice home_offline 后状态条变为离线
+[PASS] 截图 19-computer-offline — 214421 字节
+[PASS] 恢复在线后状态条回到"已连接" — notice home_online 生效
+[PASS] 截图 20-recovered-online — 207576 字节
+[PASS] 缺 relay 块时给出指向 PC 配置的提示 — 期望界面包含「该电脑未启用中继」
+[PASS] 截图 21-legacy-gateway — 214890 字节
+
+截图：
+  00-pairing.png  (187538 字节)
+  01-pairing-filled.png  (226809 字节)
+  02-sessions-computer.png  (206859 字节)
+  03-conversation.png  (346919 字节)
+  04-tool-call-expanded.png  (362391 字节)
+  05-conversation-todos.png  (362088 字节)
+  06-workspace-root.png  (131381 字节)
+  07-workspace-files.png  (143236 字节)
+  08-workspace-changes.png  (233140 字节)
+  09-diff.png  (321778 字节)
+  10-phone-tasks.png  (243642 字节)
+  11-phone-conversation.png  (202655 字节)
+  12-phone-streaming.png  (287825 字节)
+  13-phone-turn-done.png  (288096 字节)
+  14-stop-confirm.png  (241229 字节)
+  15-phone-task-stopped.png  (336416 字节)
+  16-create-phone-task.png  (264853 字节)
+  17-settings-top.png  (277333 字节)
+  18-settings-bottom.png  (206493 字节)
+  19-computer-offline.png  (214421 字节)
+  20-recovered-online.png  (207576 字节)
+  21-legacy-gateway.png  (214890 字节)
+  real-relay-01-pairing.png  (198869 字节)
+  real-relay-02-sessions.png  (267536 字节)
+  real-relay-03-conversation.png  (404969 字节)
+  real-relay-05-workspace.png  (133696 字节)
+  real-relay-06-changes.png  (311873 字节)
+  real-relay-07-diff.png  (599946 字节)
+  real-relay-08-phone-tasks.png  (207285 字节)
+  real-relay-09-create-task.png  (191783 字节)
+  real-relay-10-phone-task-created.png  (71701 字节)
+  real-relay-11-phone-task-streaming.png  (183594 字节)
+  real-relay-12-computer-offline.png  (298662 字节)
+  real-relay-13-gateway-restarted.png  (261231 字节)
+  real-relay-14-relay-restarted.png  (261281 字节)

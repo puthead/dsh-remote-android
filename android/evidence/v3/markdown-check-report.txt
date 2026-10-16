@@ -1,0 +1,58 @@
+DSH Remote · Markdown 渲染 UI 检查报告
+时间：2026-10-16 08:16:53
+设备：emulator-5554   中继（夹具）：ws://10.0.2.2:9544   包：com.deepseek.dshremote.debug
+通过 45 / 共 45
+
+[PASS] ADB 设备在线 — serial=emulator-5554
+[PASS] 夹具脚本存在 — D:\Workspace\dsh_android\android\evidence\v2\mock-tunnel.mjs
+[PASS] APK 存在 — D:\Workspace\dsh_android\android\app\build\outputs\apk\debug\app-debug.apk
+[PASS] 夹具中继可达 — http://127.0.0.1:9544/health
+[PASS] APK 安装 — Performing Streamed Install Success
+[PASS] 配对成功并进入主界面 — 底部导航出现「电脑会话」
+[PASS] 手机任务列表渲染 — 界面应出现「手机任务：跑一遍单元测试」
+[PASS] 手机任务详情已打开 — 界面应出现「条消息」
+[PASS] 打开「更多」菜单填示例 — 已通过「更多」→「填入示例」填入示例消息
+[PASS] 流式渲染中（已受理并等待模型输出） — 界面应出现「等待模型输出」
+[PASS] 流式帧里标题已按标题渲染（不带 ##） — 界面应出现「单元测试结果」
+[PASS] 流式帧里不出现原始 ## 标记 — 界面不应出现原始标记「## 单元测试结果」
+[PASS] 截图 00-phone-streaming — 250621 字节
+[PASS] 截图 01-phone-markdown-bottom — 267541 字节
+[PASS] 二级标题「结论」已渲染 — 滚动 1 屏后命中「结论」
+[PASS] 粗体正文渲染（** 已去掉） — 当前屏命中「212 个用例全部通过」
+[PASS] 界面不出现原始粗体标记 ** — 界面不应出现原始标记「**」
+[PASS] 界面不出现原始标题标记 ## — 界面不应出现原始标记「## 」
+[PASS] 表格单元格「单元测试」已渲染 — 当前屏命中「单元测试」
+[PASS] 表格单元格「通过」已渲染 — 当前屏命中「通过」
+[PASS] 界面不出现表格分隔行 | --- — 界面不应出现原始标记「| ---」
+[PASS] 引用块正文已渲染（不带 >） — 滚动 1 屏后命中「提示：跑真机 UI 证据前先」
+[PASS] 界面不出现引用标记 >  — 界面不应出现原始标记「> 提示」
+[PASS] 任务项文本已渲染 — 当前屏命中「工具链核对」
+[PASS] 界面不出现任务项原始标记 - [x] — 界面不应出现原始标记「- [x]」
+[PASS] 链接标签已渲染 — 当前屏命中「BUILD.md」
+[PASS] 界面不出现围栏 ``` 标记 — 界面不应出现原始标记「```」
+[PASS] 上滚后顶部标题仍在（滚动未错位） — 滚动 1 屏后命中「单元测试结果」
+[PASS] 围栏代码块内容已渲染 — 当前屏命中「gradlew :app:testDebugUnitTest」
+[PASS] 代码块前后的正文都渲染 — 当前屏命中「收到，我先在本工作区里跑一遍测试。」
+[PASS] 截图 02-phone-markdown-top — 244494 字节
+[PASS] 工作区根目录条目已渲染 — 界面应出现「README.md」
+[PASS] 预览里二级标题「能力」已渲染（不带 ##） — 界面应出现「能力」
+[PASS] 预览里不出现原始 ## 标记 — 界面不应出现原始标记「## 能力」
+[PASS] 预览里列表项已渲染（不带 -） — 界面应出现「电脑会话：只读镜像」
+[PASS] 截图 03-file-preview-top — 171109 字节
+[PASS] 预览里「构建」小节已渲染 — 界面应出现「构建」
+[PASS] 预览里围栏代码块内容已渲染 — 界面应出现「assembleDebug」
+[PASS] 预览里表格单元格已渲染 — 界面应出现「Kotlin」
+[PASS] 预览里不出现表格分隔行 — 界面不应出现原始标记「| ---」
+[PASS] 截图 04-file-preview-table — 171109 字节
+[PASS] 源码模式显示原始 Markdown（# 保留） — 界面应出现「# DSH Remote v2」
+[PASS] 源码模式显示原始 ## 标记 — 界面应出现「## 能力」
+[PASS] 截图 05-file-source — 175627 字节
+[PASS] 可切回预览（按钮切换为「预览 Markdown」） — 源码模式下按钮应回到预览语义
+
+截图：
+  00-phone-streaming.png  (250621 字节)
+  01-phone-markdown-bottom.png  (267541 字节)
+  02-phone-markdown-top.png  (244494 字节)
+  03-file-preview-top.png  (171109 字节)
+  04-file-preview-table.png  (171109 字节)
+  05-file-source.png  (175627 字节)

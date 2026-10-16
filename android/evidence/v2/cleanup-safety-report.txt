@@ -1,0 +1,13 @@
+DSH Remote v2 · E2E 清理安全性自检报告（P0 回归）
+时间：2026-10-09 00:37:56
+替身 relay：端口 19643，home=D:\Workspace\dsh_android\android\evidence\v2\e2e-runtime\decoy-relay-home（命令行与队友的 relay 同形）
+通过 5 / 共 5
+
+[PASS] 替身 relay 初始化 — node.exe : 已写入配置：D:\Workspace\dsh_android\android\evidence\v2\e2e-runtime\decoy-relay-home\config.json At D:\Workspace\dsh_android\android\evidence\v2\run-e2e-safety-check.ps1:42 char:21 + try { $output = & $NodeExe @Arguments 2>&1 } finally { $ErrorActi ... + ~~~~~~~~~~~~~~~~~~~~~~~~~~ + CategoryInfo : NotSpecified: (已写入配置：D:\Worksp...ome\config.json:String) [], RemoteException + FullyQualifiedErrorId : NativeCommandError { "ok": true, "home": "D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\decoy-relay-home", "configPath": "D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\decoy-relay-home\\config.json", "homesFile": "D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\decoy-relay-home\\homes.json", "logsDir": "D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\decoy-relay-home\\logs", "relayName": "decoy.local", "host": "0.0.0.0", "port": 19643, "tls": { "mode": "off", "certFile": null, "keyFile": null, "generated": false }, "relaySecret": "MojjZ5VoAHJejfQrZuUVhf8WGDQvHwc_", "tunnelUrl": "ws://decoy.local:19643/api/v2/tunnel/device", "next": [ "node relay.mjs serve --home \"D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\decoy-relay-home\"", "node relay.mjs home-token --home \"D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\decoy-relay-home\" --name \"decoy.local\"" ] } init 完成。relaySecret 与 homeToken 都是秘密：请只放在 PC 侧配置里，不要贴进聊天/日志。 
+[PASS] 替身 relay 已启动 — pid=2364
+[PASS] 替身 relay 提供 /health — http://127.0.0.1:19643/health
+[PASS] 替身 relay 进程仍在（未被误杀） — pid=2364
+[PASS] 替身 relay /health 仍正常 — http://127.0.0.1:19643/health
+
+结论：E2E 的清理只作用于本次运行登记的 PID（父链认领 + taskkill /PID /T /F），
+      不再按命令行关键字全局匹配，因此不会误杀队友的 relay/gateway。

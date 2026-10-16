@@ -1,0 +1,61 @@
+{
+    "host":  "127.0.0.1",
+    "port":  8887,
+    "dshHome":  "D:\\Workspace\\dsh_android\\android\\evidence\\v2\\e2e-runtime\\gateway-home",
+    "gatewayVersion":  "2.0.0",
+    "authRequired":  true,
+    "maxConcurrent":  2,
+    "maxQueue":  100,
+    "defaultTimeoutSec":  3600,
+    "maxTimeoutSec":  86400,
+    "workspaceAllowlist":  [
+                               "D:\\Workspace\\dsh_android"
+                           ],
+    "defaultWorkspace":  "D:\\Workspace\\dsh_android",
+    "dsh":  {
+                "node":  "D:\\DSH\\resources\\runtime\\primary-runtime\\dependencies\\node\\bin\\node.exe",
+                "launcher":  "D:\\DSH\\resources\\runtime\\cli\\bin\\dsh.cmd",
+                "profile":  "sdk",
+                "provider":  "deepseek-official",
+                "model":  "deepseek-flash",
+                "turnTimeoutSec":  900,
+                "version":  "0.1.0-rc.7"
+            },
+    "mirror":  {
+                   "enabled":  true,
+                   "dshHome":  null,
+                   "liveWindowMs":  60000,
+                   "listLimit":  50
+               },
+    "relay":  {
+                  "enabled":  true,
+                  "url":  "ws://127.0.0.1:9643",
+                  "homeName":  "DESKTOP-E2E",
+                  "homeToken":  "REDACTED-E2E-FIXTURE",
+                  "relaySecret":  "",
+                  "reconnect":  {
+                                    "minMs":  1000,
+                                    "maxMs":  30000,
+                                    "factor":  2,
+                                    "jitter":  0.2
+                                },
+                  "tls":  {
+                              "rejectUnauthorized":  true,
+                              "ca":  null
+                          },
+                  "pairWindow":  {
+                                     "attempts":  5
+                                 },
+                  "allowNonLoopback":  false
+              },
+    "sessionStream":  {
+                          "bufferSize":  4000,
+                          "heartbeatMs":  15000,
+                          "maxClients":  16
+                      },
+    "log":  {
+                "dirName":  "logs",
+                "filePrefix":  "gateway",
+                "toConsole":  true
+            }
+}

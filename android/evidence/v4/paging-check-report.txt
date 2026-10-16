@@ -1,0 +1,340 @@
+﻿DSH Remote · 手机端分页真机（模拟器）证据报告
+==============================================================================
+生成时间   : 2026-10-16 08:30:45
+脚本       : android/evidence/v4/run-paging-check.ps1
+夹具       : android/evidence/v4/mock-tunnel.mjs (端口 9545，分页语义照抄 session-reader.mjs:745-751)
+设备       : emulator-5554（AVD dshr_ui / Android 14 / x86_64）
+APK        : D:\Workspace\dsh_android\android\app\build\outputs\apk\debug\app-debug.apk
+APK sha256 : 8C1B0A8038D6F2AE06A533CBF0A512F41A4AB1F7ACF9A9017F41ED0082A81949
+耗时       : 194 秒
+时间基     : 所有 T+ 秒都是相对本轮脚本开始；夹具请求的 T+ 取夹具进程 Date.now()（同一台机器同一时钟）
+
+断言清单
+------------------------------------------------------------------------------
+[PASS] ADB 设备在线 :: serial=emulator-5554
+[PASS] 夹具脚本存在 :: D:\Workspace\dsh_android\android\evidence\v4\mock-tunnel.mjs
+[PASS] APK 存在 :: D:\Workspace\dsh_android\android\app\build\outputs\apk\debug\app-debug.apk
+[PASS] 夹具中继可达 :: http://127.0.0.1:9545/health
+[PASS] APK 安装 :: Performing Streamed Install Success
+[PASS] 配对成功并进入会话列表 :: 底部导航出现「电脑会话」
+[PASS] 截图 00-sessions-list :: 216152 字节
+[PASS] 分页会话卡片（220 条历史）出现在列表 :: 期望界面包含「分页验证」
+[PASS] A19 打开会话只触发一次「最新一页」请求 :: 共 1 条
+[PASS] A1 首屏没有一次性加载全部 220 条 :: 实测 已加载 60/220 条（PAGE_SIZE=60）
+[PASS] A1b 首屏恰好一页 60 条 :: 实测 60 条
+[PASS] 截图 01-first-page :: 281594 字节
+[PASS] A1c 视口贴在最新一条时右下角不出现「回到最新」 :: 出现=False
+[PASS] 截图 01b-first-page-fab :: 281594 字节
+[PASS] A1d 首屏 FAB 的出现与几何判定一致（末项可见时不该出现） :: 末项可见=True，FAB=False
+[PASS] A2 上拉到顶能看到「加载更早」入口/加载中 :: 到顶判据=earliest
+[PASS] A18 上拉到顶会触发一次更早页请求 :: 新增 3 条
+[PASS] A3 上拉后已加载数严格变大 :: 60 → 220
+[PASS] A3b（产品预期）分页是逐页推进的：时间轴上每次增量 <= 一页（不出现一次拉完） :: 时间轴增量 60→120（+60），120→180（+60），180→220（+40）；最大单次增量 60 条（上限一页 60 条）
+[PASS] 截图 03-after-pull-1 :: 282676 字节
+[PASS] A4 加载更早后视口没有被拽回底部（看不到最新一条，且出现「回到最新」） :: 可见最小 #1，FAB 出现=True
+[PASS] A5 更早历史分多次取回（计数时间轴增量 >= 2 次，或本次上拉计数变大） :: 220 → 220；时间轴增量次数=3；窗口已满=True
+[PASS] 截图 05-after-pull-2 :: 282488 字节
+[PASS] A6 拉到最早：已加载 == 总数 :: 实测 220/220
+[PASS] A7 入口文案变成「已到最早，没有更早的消息了」 :: 滑到顶后第 0 项文案
+[PASS] 截图 06-earliest :: 282488 字节
+[PASS] 分段按钮出现「轨迹」 :: 期望界面包含「轨迹」
+[PASS] A17 切换视图本身不触发额外 transcript 请求 :: 新增 0 条
+[PASS] A8b 轨迹侧入口与对话流同款（「已到最早」文案 noun=轨迹） :: 轨迹列表第 0 项
+[PASS] A8 轨迹行数 ≥ 已加载消息数（工具/结果摊开成多行） :: 轨迹 330 步 vs 消息 220 条
+[PASS] 截图 07-trajectory :: 268124 字节
+[PASS] A9 切换视图没有重新拉取（切回对话后 X 不变） :: 220 → 220
+[PASS] A10 上翻历史后右下角出现「回到最新」 :: contentDescription=回到最新 可见=True
+[PASS] 截图 08-fab-visible :: 282488 字节
+[PASS] A11 点一次「回到最新」即看到列表末尾 #220 :: 视口里出现「最新消息 #220」
+[PASS] A22 点「回到最新」不产生新的 transcript 请求 :: 新增 0 条
+[PASS] 截图 09-after-fab :: 280872 字节
+[PASS] A23（D6 回归）上拉在途刷新之后仍能取满全部历史（窗口无空洞） :: 刷新后重新拉到最早：220/220（在途窗口内点中「刷新」=True）
+[PASS] 截图 10-d6-after-refresh :: 283102 字节
+[PASS] A12 logcat 无本包 FATAL EXCEPTION :: 本包命中 0 条（全设备 0 条）
+[PASS] A13 logcat 无「Key was already used」 :: 命中 0 条
+[PASS] A14 logcat 无本包 IllegalArgumentException :: 本包命中 0 条（全设备 0 条）
+[PASS] A15 夹具确实按游标收到多页 transcript 请求 :: 共 12 条 transcript 请求
+[PASS] A16 夹具侧出现过至少 2 次「带 cursor 的更早页」请求 :: 带 cursor 的请求 9 条
+[PASS] A20（D4 观测）界面「已加载 X」不超过夹具累计服务的实际条数 :: X=220，夹具累计 220 条（4 页）
+[PASS] A21（D2 复跑）带游标的更早页不被重复请求（D6 干扰之前） :: 干净序列里更早页 3 条（游标 160,100,40），重复游标：无；同段「最新一页」2 条（打开会话 + 追新/刷新，合法重取，不计入重复判定）；8b 之后另有 7 条（刷新重置窗口后重取同一页属正确行为）
+
+合计 PASS=46 FAIL=0
+
+根因分析（实测 -> 判定；由脚本按本轮实测数字生成）
+------------------------------------------------------------------------------
+本节只写"实测数字 -> 判定"。R1-R5 是修复前那一轮（PASS=31/FAIL=9）的读数，也是选定修法的依据；R6 是修复后的复跑读数。标「推断」的是机制解释，标「未取证」的是本轮手段拿不到的。
+
+R1（A1c / D5，界面）：首屏实测已加载 60 条、firstVisibleItemIndex≈56、距末尾 4 项、「回到最新」按钮（按 content-desc 判定）出现=False。判定：首屏 FAB 仍出现，且几何判据算出"不在末尾 2 项以内" ⇒ 判据/阈值仍有问题，需继续查。
+    注：A1c/A1d 在修复前后都 FAIL 过一次，但那两次 FAIL 是**脚本假失败** —— 判"按钮是否出现"用的是文本子串匹配，而夹具第 220 条消息的正文里就写着「…点「回到最新」后必须看到这一条。」；首屏截图 01-first-page 里右下角其实没有按钮（同一断言因此无法区分"按钮在"与"正文提到按钮"）。
+    现在改成只看 content-desc="回到最新"（脚本里的 Test-FabVisible），并用应用侧 DEBUG 日志（tag=DshPaging）实测首屏 atBottom=true、userScrolled=false，两条独立读数互相印证。
+
+R2（A18 / D1，界面）：未取证 —— 没有取到"到顶那一刻"的几何。
+
+R3（A17 / A9）：切换视图那一刻夹具新增 0 条请求；逐条看它们的 cursor（见"过程记录"里以"切视图那一刻新增的请求"开头那行）是 160 -> 100 -> 40 的**真翻页**，不是切视图引起的重复拉取 ⇒ 这 0 条是"上拉积压的加载在切视图那一刻才被放行"（切视图让 effect 重启、闩锁归零，那次本该在上拉时发出的 loadOlder 终于发出去）。所以 A9 的 60 -> 220 不是"切视图重新拉取"，而是"上拉终于生效了"，A17/A9 应当读成对 D1/D3 的观测。
+
+R4（A6 / A7 / A8b / D2，数据层）：夹具侧最早页 cursor=40（区间 [0,40)）被重复请求 3 次（修复前实测 9 次）。机制：服务端在这一页回的 nextCursor 是 null（start == 0 = 已到最早），而旧代码没把它当成"没有更早了" —— TranscriptPager.kt 的 pickNextCursor 把"offer 为空"一律当作"老网关没表态"从而保留旧游标，于是 hasMoreOlder 永真、cursor=40 被反复拉。Lead 的修法：TranscriptPage 增 cursorProvided，用 obj.has("nextCursor") 区分"字段缺失"与"字段为 null"。复跑实测：最早页仍被重复请求 3 次 ⇒ 修复未生效，或本次跑的不是修复后的 APK。
+
+R5（D4，数据层）：夹具累计服务的不同页合计 220 条（4 页），界面最后观测到「已加载 220」。判定：界面数字等于窗口实际条数 ⇒ 本轮没有观测到虚报。
+
+R6（复跑实测 / 修复后）：以下读数来自本轮（修复后的 APK），与 R1-R5 的修复前读数对照。
+    D5 / A1c：首屏贴底时「回到最新」按钮出现 = False。D5 本身是真缺陷（修复前首屏截图 01-first-page 右下角确实画着那个按钮）；但 A1c/A1d 这两条断言同时又是**脚本假失败** —— 判"按钮是否出现"用的是文本子串匹配，而夹具第 220 条消息的正文里就写着「…点「回到最新」后必须看到这一条。」，所以它在修复前后都报 True。
+      修法三处：①判据换成"最后一项还在视口里"（旧的首可见项 <= 2 在长条目下会误判）；②atBottom 的重算闸在"用户亲手拖过列表（DragInteraction.Start）"之后 —— 第一版只用 isScrollInProgress 复跑仍错，因为程序自己的贴底动画也会把它置 true；③断言改成按 content-desc 精确匹配。
+    D1 / A18：第 1 次上拉到顶时夹具新增请求 = 3 条（修复前 0）。判据没改（首可见下标 <= 1，实测成立），改的是开火时机：第一版用 isScrollInProgress，复跑实测它在两个方向上都不准（程序滚动动画会误开火 —— 见 A22；用户停在顶部边界再拖时列表无内容可滚，信号可能不动）⇒ 第二版改认 DragInteraction.Start：只有手指真的拖过列表才允许把"到达顶部"当成加载意图。
+    D3 / A17：切视图那一刻新增请求 = 0 条（修复前 3）。改法：轨迹视图改用与对话流同一份 LoadOlderOnReachTop，不再"首帧即开火 + 每次加载完成重启后闩锁归零"。
+    D2 / A21：干净分页序列里被重复请求的游标 = 0 组（修复前最早页 cursor=40 连打 9 次）。
+    D6 / A23（Lead 的窗口世代号修复）：上拉在途时立刻刷新，之后重新拉到最早 = 60 条（有空洞时窗口永远凑不齐 total=220）。在途窗口内点中「刷新」=True。
+    A22：点「回到最新」这一下**不该**产生新的 transcript 请求 —— 它是程序动画，修复前会被 isScrollInProgress 误判成用户上拉（复跑实测夹具在 T+181.0s 白收一条 cursor=100）。
+
+未取证清单（本轮手段拿不到的，写在最显眼处）：真实网关（只照抄了 session-reader.mjs:745-751 的语义）、600 条窗口上限与裁剪路径（220 < 600 未触发）、实体手机（只有 AVD dshr_ui / Android 14 x86_64）、版本号递增（versionCode 4 / 2.2.0）。
+
+过程记录（按发生顺序）
+------------------------------------------------------------------------------
+T+   0s  APK sha256=8C1B0A8038D6F2AE06A533CBF0A512F41A4AB1F7ACF9A9017F41ED0082A81949
+T+   4s  夹具端口=9545 分页会话支持 cursor/limit/nextCursor/total/from/to；更早页注入 1200 ms 模拟时延
+T+  38s  首屏实测 已加载 60/220 条
+T+  38s  打开会话至今夹具收到 transcript 请求 1 条
+T+  38s  首屏（视口贴底）时「回到最新」按钮出现=False
+T+  39s  首屏（未上拉） 列表几何：视口=[578,1791] 入口可见=False 可见消息=5条(#216..#220) firstVisibleItemIndex≈56 距末尾=4项（等价判据 <=2）[最上面可见消息 #216 => 距末尾 4 项]
+T+  39s  首屏几何换算：firstVisibleItemIndex≈56、距末尾=4 项 ⇒ isNearBottom 等价判定=False；FAB 实际出现=False
+T+  73s  第 1 次上拉：到顶判据=earliest
+T+  75s  第 1 次上拉前后：夹具请求数 1 → 4
+T+  75s  第 1 次上拉后 已加载 220/220 条（加载中帧=False）
+T+  75s  D1 实测：到顶时入口可见=、firstVisibleItemIndex≈-1、距末尾=-1 项；第 1 次上拉夹具新增请求 3 条（累计 4 条）
+T+  81s  单次拖拽 #1：已加载 220 → 220（增量 0），夹具新增请求 0 条
+T+  81s  计数时间轴增量：60→120（+60），120→180（+60），180→220（+40）（共 3 次增量）
+T+  83s  第 1 次上拉后视口可见编号范围 #1..#maxNo
+T+  89s  第 2 次上拉：到顶判据=earliest
+T+  91s  第 2 次上拉后 已加载 220/220 条（加载中帧=False）
+T+  91s  窗口已满（220/220，界面出现「已到最早」）⇒ A5 的「再上拉还能推进」已不适用，按已拉满判定
+T+  98s  切视图前夹具收到 transcript 请求 4 条
+T+ 101s  切视图后夹具收到 transcript 请求 4 条（本次新增 0 条）
+T+ 103s  切到轨迹后 轨迹总步数=330（轨迹页不显示「已加载 X/Y 条」，A9 在第 8 步切回对话后判定）
+T+ 127s  8b 先刷新把窗口重置成最新一页：已加载 60/220 条（点中「刷新」=True）
+T+ 176s  8b 在途刷新时序：上拉判据=earliest、在途窗口内点中「刷新」=True；此刻已加载 60/220；夹具请求 5 → 9 条
+T+ 189s  8b 恢复取页 #1 后 已加载 220/220 条
+T+ 194s  logcat 命中：FATAL=0（本包 0）KeyReuse=0（本包 0）IllegalArgument=0（本包 0）
+T+ 194s  DshPaging 诊断日志：240 行（drag-start 30 条、observe 210 条）→ raw\logcat-dshpaging.txt
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=false userScrolled=false lastIdx=null total=0 nearBottom=true atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=true userScrolled=false lastIdx=5 total=61 nearBottom=false atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=true userScrolled=false lastIdx=8 total=61 nearBottom=false atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=true userScrolled=false lastIdx=19 total=61 nearBottom=false atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=true userScrolled=false lastIdx=30 total=61 nearBottom=false atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=true userScrolled=false lastIdx=53 total=61 nearBottom=false atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=true userScrolled=false lastIdx=60 total=61 nearBottom=true atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=false userScrolled=false lastIdx=60 total=61 nearBottom=true atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): drag-start -> userScrolled=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=true userScrolled=true lastIdx=60 total=61 nearBottom=true atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): observe scrolling=false userScrolled=true lastIdx=60 total=61 nearBottom=true atBottom=true
+T+ 194s  DshPaging: D/DshPaging( 8921): drag-start -> userScrolled=true
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=160
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=100
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=40
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=160
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=100
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=40
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=160
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=100
+T+ 194s  fixture-log: [fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=40
+T+ 194s  fixture: T+  32.4s  夹具收到 cursor=(null=最新一页) limit=60 from=160 to=220 total=220 本页条数=60
+T+ 194s  fixture: T+  64.5s  夹具收到 cursor=160 limit=60 from=100 to=160 total=220 本页条数=60
+T+ 194s  fixture: T+  67.1s  夹具收到 cursor=100 limit=60 from=40 to=100 total=220 本页条数=60
+T+ 194s  fixture: T+  69.9s  夹具收到 cursor=40 limit=60 from=0 to=40 total=220 本页条数=40
+T+ 194s  fixture: T+ 121.2s  夹具收到 cursor=(null=最新一页) limit=60 from=160 to=220 total=220 本页条数=60
+T+ 194s  fixture: T+ 153.0s  夹具收到 cursor=160 limit=60 from=100 to=160 total=220 本页条数=60
+T+ 194s  fixture: T+ 155.7s  夹具收到 cursor=100 limit=60 from=40 to=100 total=220 本页条数=60
+T+ 194s  fixture: T+ 158.4s  夹具收到 cursor=40 limit=60 from=0 to=40 total=220 本页条数=40
+T+ 194s  fixture: T+ 168.2s  夹具收到 cursor=(null=最新一页) limit=60 from=160 to=220 total=220 本页条数=60
+T+ 194s  fixture: T+ 178.3s  夹具收到 cursor=160 limit=60 from=100 to=160 total=220 本页条数=60
+T+ 194s  fixture: T+ 181.9s  夹具收到 cursor=100 limit=60 from=40 to=100 total=220 本页条数=60
+T+ 194s  fixture: T+ 184.4s  夹具收到 cursor=40 limit=60 from=0 to=40 total=220 本页条数=40
+T+ 194s  夹具收到的 transcript 请求 12 条，其中带 cursor 的更早页 9 条
+T+ 194s  夹具侧 cursor=40（最早页 [0,40)）被重复请求 3 次
+T+ 194s  D4 两个口径：夹具累计服务的不同页 = 4 页 / 合计 220 条（客户端窗口最多只能有这么多）；界面最后观测到「已加载 220/220」
+
+运行中观察到的全部界面文案（去重，用于证明某个状态确实出现过）
+------------------------------------------------------------------------------
+分页验证：220 条历史消息
+dsh_android · 已加载 60/220 条
+对话
+轨迹
+电脑端还没把该会话交给网关接管；请在电脑端继续，或在「手机任务」新建任务
+去手机任务
+历史消息 #216 · 模型输出：第 216 条历史的摘要（夹具数据）。
+pwsh
+0.0s · exit 0
+历史消息 #217 · 用户提问：核对第 217 条历史是否落在窗口里。
+22:03:34
+历史消息 #218 · 模型输出：第 218 条历史的摘要（夹具数据）。
+历史消息 #219 · 模型输出：第 219 条历史的摘要（夹具数据）。
+最新消息 #220：分页窗口的末尾 —— 点「回到最新」后必须看到这一条。
+只读会话 · 无法从手机发送消息
+网关未启用审批通道（旧版本网关）
+该会话当前只读，无法在手机上续聊
+电脑会话
+手机任务
+工作区
+设置
+历史消息 #210 · 模型输出：第 210 条历史的摘要（夹具数据）。
+历史消息 #211 · 模型输出：第 211 条历史的摘要（夹具数据）。
+D:\Workspace\dsh_android\android\evidence\v4\raw\历史-211.txt
+第 211 条历史留下的产物
+打开
+历史消息 #212 · 模型输出：第 212 条历史的摘要（夹具数据）。
+历史消息 #213 · 用户提问：核对第 213 条历史是否落在窗口里。
+历史消息 #214 · 模型输出：第 214 条历史的摘要（夹具数据）。
+历史消息 #204 · 模型输出：第 204 条历史的摘要（夹具数据）。
+历史消息 #205 · 用户提问：核对第 205 条历史是否落在窗口里。
+21:51:34
+历史消息 #206 · 模型输出：第 206 条历史的摘要（夹具数据）。
+历史消息 #207 · 模型输出：第 207 条历史的摘要（夹具数据）。
+历史消息 #208 · 模型输出：第 208 条历史的摘要（夹具数据）。
+历史消息 #197 · 用户提问：核对第 197 条历史是否落在窗口里。
+21:43:34
+历史消息 #198 · 模型输出：第 198 条历史的摘要（夹具数据）。
+历史消息 #199 · 模型输出：第 199 条历史的摘要（夹具数据）。
+历史消息 #200 · 模型输出：第 200 条历史的摘要（夹具数据）。
+历史消息 #201 · 用户提问：核对第 201 条历史是否落在窗口里。
+历史消息 #191 · 模型输出：第 191 条历史的摘要（夹具数据）。
+D:\Workspace\dsh_android\android\evidence\v4\raw\历史-191.txt
+第 191 条历史留下的产物
+历史消息 #192 · 模型输出：第 192 条历史的摘要（夹具数据）。
+历史消息 #193 · 用户提问：核对第 193 条历史是否落在窗口里。
+21:39:34
+历史消息 #194 · 模型输出：第 194 条历史的摘要（夹具数据）。
+历史消息 #184 · 模型输出：第 184 条历史的摘要（夹具数据）。
+历史消息 #185 · 用户提问：核对第 185 条历史是否落在窗口里。
+21:31:34
+历史消息 #186 · 模型输出：第 186 条历史的摘要（夹具数据）。
+历史消息 #187 · 模型输出：第 187 条历史的摘要（夹具数据）。
+历史消息 #188 · 模型输出：第 188 条历史的摘要（夹具数据）。
+历史消息 #177 · 用户提问：核对第 177 条历史是否落在窗口里。
+21:23:34
+历史消息 #178 · 模型输出：第 178 条历史的摘要（夹具数据）。
+历史消息 #179 · 模型输出：第 179 条历史的摘要（夹具数据）。
+历史消息 #180 · 模型输出：第 180 条历史的摘要（夹具数据）。
+历史消息 #181 · 用户提问：核对第 181 条历史是否落在窗口里。
+21:27:34
+历史消息 #182 · 模型输出：第 182 条历史的摘要（夹具数据）。
+历史消息 #171 · 模型输出：第 171 条历史的摘要（夹具数据）。
+D:\Workspace\dsh_android\android\evidence\v4\raw\历史-171.txt
+第 171 条历史留下的产物
+历史消息 #172 · 模型输出：第 172 条历史的摘要（夹具数据）。
+历史消息 #173 · 用户提问：核对第 173 条历史是否落在窗口里。
+21:19:34
+历史消息 #174 · 模型输出：第 174 条历史的摘要（夹具数据）。
+历史消息 #175 · 模型输出：第 175 条历史的摘要（夹具数据）。
+历史消息 #165 · 用户提问：核对第 165 条历史是否落在窗口里。
+21:11:34
+历史消息 #166 · 模型输出：第 166 条历史的摘要（夹具数据）。
+历史消息 #167 · 模型输出：第 167 条历史的摘要（夹具数据）。
+历史消息 #168 · 模型输出：第 168 条历史的摘要（夹具数据）。
+历史消息 #169 · 用户提问：核对第 169 条历史是否落在窗口里。
+dsh_android · 已加载 120/220 条
+加载更早的消息（上拉或点这里）
+历史消息 #101 · 用户提问：核对第 101 条历史是否落在窗口里。
+20:07:34
+历史消息 #102 · 模型输出：第 102 条历史的摘要（夹具数据）。
+历史消息 #103 · 模型输出：第 103 条历史的摘要（夹具数据）。
+历史消息 #104 · 模型输出：第 104 条历史的摘要（夹具数据）。
+dsh_android · 已加载 180/220 条
+历史消息 #041 · 用户提问：核对第 041 条历史是否落在窗口里。
+19:07:34
+历史消息 #042 · 模型输出：第 042 条历史的摘要（夹具数据）。
+历史消息 #043 · 模型输出：第 043 条历史的摘要（夹具数据）。
+历史消息 #044 · 模型输出：第 044 条历史的摘要（夹具数据）。
+dsh_android · 已加载 220/220 条
+已到最早，没有更早的消息了
+历史消息 #001 · 用户提问：核对第 001 条历史是否落在窗口里。
+18:27:34
+历史消息 #002 · 模型输出：第 002 条历史的摘要（夹具数据）。
+历史消息 #003 · 模型输出：第 003 条历史的摘要（夹具数据）。
+历史消息 #004 · 模型输出：第 004 条历史的摘要（夹具数据）。
+历史消息 #005 · 用户提问：核对第 005 条历史是否落在窗口里。
+历史消息 #007 · 模型输出：第 007 条历史的摘要（夹具数据）。
+历史消息 #008 · 模型输出：第 008 条历史的摘要（夹具数据）。
+历史消息 #009 · 用户提问：核对第 009 条历史是否落在窗口里。
+18:35:34
+历史消息 #010 · 模型输出：第 010 条历史的摘要（夹具数据）。
+历史消息 #011 · 模型输出：第 011 条历史的摘要（夹具数据）。
+执行轨迹
+第 1–55 轮 · 共 330 步 · 165 次工具调用
+第 55 轮
+已到最早，没有更早的轨迹了
+第 1 轮
+你
+echo 历史消息 #002
+18:28:34
+执行结果
+历史消息 #002 · ok
+已完成
+模型输出
+echo 历史消息 #003
+18:29:34
+历史消息 #003 · ok
+330
+步数
+165
+工具调用
+3:39:00
+用时
+历史消息 #203 · 模型输出：第 203 条历史的摘要（夹具数据）。
+历史消息 #164 · 模型输出：第 164 条历史的摘要（夹具数据）。
+历史消息 #161 · 用户提问：核对第 161 条历史是否落在窗口里。
+21:07:34
+历史消息 #162 · 模型输出：第 162 条历史的摘要（夹具数据）。
+历史消息 #163 · 模型输出：第 163 条历史的摘要（夹具数据）。
+历史消息 #106 · 模型输出：第 106 条历史的摘要（夹具数据）。
+历史消息 #107 · 模型输出：第 107 条历史的摘要（夹具数据）。
+历史消息 #108 · 模型输出：第 108 条历史的摘要（夹具数据）。
+历史消息 #109 · 用户提问：核对第 109 条历史是否落在窗口里。
+20:15:34
+历史消息 #110 · 模型输出：第 110 条历史的摘要（夹具数据）。
+历史消息 #111 · 模型输出：第 111 条历史的摘要（夹具数据）。
+
+UI 计数时间轴（「已加载 X/Y」每次变化，T+ = 相对本轮开始的秒数）
+------------------------------------------------------------------------------
+T+  38s  UI 计数 = 60/220
+T+  67s  UI 计数 = 120/220
+T+  70s  UI 计数 = 180/220
+T+  73s  UI 计数 = 220/220
+T+ 130s  UI 计数 = 60/220
+T+ 156s  UI 计数 = 120/220
+T+ 158s  UI 计数 = 180/220
+T+ 161s  UI 计数 = 220/220
+T+ 176s  UI 计数 = 60/220
+T+ 182s  UI 计数 = 120/220
+T+ 184s  UI 计数 = 180/220
+T+ 187s  UI 计数 = 220/220
+
+夹具侧 transcript 请求序列（控制面内存记账，不依赖日志文件落盘）
+------------------------------------------------------------------------------
+T+  32.4s  夹具收到 cursor=(null=最新一页) limit=60 from=160 to=220 total=220 本页条数=60
+T+  64.5s  夹具收到 cursor=160 limit=60 from=100 to=160 total=220 本页条数=60
+T+  67.1s  夹具收到 cursor=100 limit=60 from=40 to=100 total=220 本页条数=60
+T+  69.9s  夹具收到 cursor=40 limit=60 from=0 to=40 total=220 本页条数=40
+T+ 121.2s  夹具收到 cursor=(null=最新一页) limit=60 from=160 to=220 total=220 本页条数=60
+T+ 153.0s  夹具收到 cursor=160 limit=60 from=100 to=160 total=220 本页条数=60
+T+ 155.7s  夹具收到 cursor=100 limit=60 from=40 to=100 total=220 本页条数=60
+T+ 158.4s  夹具收到 cursor=40 limit=60 from=0 to=40 total=220 本页条数=40
+T+ 168.2s  夹具收到 cursor=(null=最新一页) limit=60 from=160 to=220 total=220 本页条数=60
+T+ 178.3s  夹具收到 cursor=160 limit=60 from=100 to=160 total=220 本页条数=60
+T+ 181.9s  夹具收到 cursor=100 limit=60 from=40 to=100 total=220 本页条数=60
+T+ 184.4s  夹具收到 cursor=40 limit=60 from=0 to=40 total=220 本页条数=40
+
+夹具请求日志摘录（transcript）
+------------------------------------------------------------------------------
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=160
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=100
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=40
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=160
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=100
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=40
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=160
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=100
+[fixture] req GET /api/v2/sessions/session-22000000-aaaa-4bbb-8ccc-000000000220/transcript?limit=60&cursor=40

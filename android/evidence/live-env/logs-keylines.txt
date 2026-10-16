@@ -1,0 +1,46 @@
+﻿# live-env 关键日志（由 Get-Content -Encoding UTF8 摘取：日志文件被运行中的进程独占，[IO.File]::ReadAllText 会报「正由另一进程使用」）
+# 生成时间: 2026-10-14 22:39:08
+
+## gateway.out.log
+2026-10-14T14:38:26.521Z [info] 电脑端会话驱动通道：桌面端 DSH http://127.0.0.1:19387
+2026-10-14T14:38:26.523Z [info] 会话续聊启动器：launcher:D:\DSH\resources\runtime\cli\bin\dsh.cmd → D:\DSH\DeepSeek Harness.exe（--profile sdk）
+2026-10-14T14:38:26.524Z [info] 已加载 2 个设备令牌
+2026-10-14T14:38:26.524Z [info] 网关初始化完成：home=D:\Workspace\dsh_android\.runtime\live-env\home 并发=2 队列上限=100 白名单=D:\Workspace\插件 | D:\Workspace\dsh_android | D:\Workspace\论文 | D:\Workspace\canpy | C:\Users\Administrator\dsh-workspace
+2026-10-14T14:38:26.532Z [info] 监听 http://127.0.0.1:18087（apiVersion=1 supported=1/2）
+2026-10-14T14:38:26.532Z [info] relay.enabled=true，尝试连接中继 ws://127.0.0.1:9700
+dsh-remote v2.1.0 已启动
+  监听地址 : http://127.0.0.1:18087
+  本机地址 : http://127.0.0.1:18087
+  DSH_HOME : D:\Workspace\dsh_android\.runtime\live-env\home
+  白名单   : D:\Workspace\插件 | D:\Workspace\dsh_android | D:\Workspace\论文 | D:\Workspace\canpy | C:\Users\Administrator\dsh-workspace
+  并发/队列: 2 / 100
+  日志     : D:\Workspace\dsh_android\.runtime\live-env\home\logs\gateway-YYYYMMDD.log
+  下一步   : node gateway.mjs pair --port 18087   （或用 pair.ps1 生成配对码）
+  能力代次 : gatewayVersion=2.1.0  /api/v1/health.apiVersion=1  supportedApiVersions=[1,2]
+  可用能力 : tasks,events,pairing,workspaces,cancel + sessions,tasks(v2),transcript,stream,workspace.*,relay
+  代次自检 : 本进程横幅含 "supportedApiVersions" 即为 v2 构建；v1 旧构建的 /api/v2/* 会返回 404
+  会话镜像 : C:\Users\Administrator\.dsh（只读，来源 config）
+  手机会话 : D:\Workspace\dsh_android\.runtime\live-env\home\dsh-home（SDK profile 创建，可续聊）
+  会话续聊 : 可用（launcher:D:\DSH\resources\runtime\cli\bin\dsh.cmd → --profile sdk）
+  中继隧道 : ws://127.0.0.1:9700（enabled=true）
+2026-10-14T14:38:26.534Z [info] 网关启动完成 port=18087
+2026-10-14T14:38:26.537Z [info] 已从中继状态文件恢复凭据：D:\Workspace\dsh_android\.runtime\live-env\home\relay.json（homeId=home_X9vYLiS71C8wVol44hpn7Q）
+2026-10-14T14:38:26.545Z [info] 审批桥已连上桌面端事件流（$events）
+2026-10-14T14:38:26.547Z [info] 中继隧道已连接：ws://127.0.0.1:9700/api/v2/tunnel/home（已发 hello，等待 ready）
+
+## gateway.err.log
+
+## relay.out.log
+{"ok":true,"pid":9188,"relayVersion":"2.0.1","apiVersion":2,"host":"127.0.0.1","port":9700,"tlsMode":"off","relayName":"live-relay","tunnelUrl":"ws://10.0.2.2:9700/api/v2/tunnel/device","home":"D:\\Workspace\\dsh_android\\.runtime\\live-env\\relay-home","configPath":"D:\\Workspace\\dsh_android\\.runtime\\live-env\\relay-home\\config.json"}
+
+## relay.err.log
+2026-10-14T14:38:25.290Z [info] 已加载 1 个 home 记录（只含 sha256 摘要）
+2026-10-14T14:38:25.292Z [info] 中继初始化完成：relayName=live-relay 监听=127.0.0.1:9700 tls=off 隧道=ws://10.0.2.2:9700/api/v2/tunnel/device
+2026-10-14T14:38:25.300Z [info] 中继已启动：ws://127.0.0.1:9700（apiVersion=2）
+中继已启动：ws://127.0.0.1:9700  health=http://127.0.0.1:9700/health
+2026-10-14T14:38:26.545Z [info] home 隧道已升级，等待 hello homeId=home_X9vY****（超时 10000ms）
+2026-10-14T14:38:26.548Z [info] home 隧道上线 homeId=home_X9vY**** name=活动环境台式机
+2026-10-14T14:38:41.091Z [info] device 隧道已升级，等待 hello homeId=home_X9vY**** deviceId=82e41b3b-2595-4d23-be77-5087382ca6df（超时 10000ms）
+2026-10-14T14:38:41.094Z [info] device 隧道上线 homeId=home_X9vY**** deviceId=82e41b3b-2595-4d23-be77-5087382ca6df homeOnline=true
+2026-10-14T14:38:56.554Z [debug] 心跳 tick key=home:home_X9vY**** idle=434ms timeout=90000ms
+

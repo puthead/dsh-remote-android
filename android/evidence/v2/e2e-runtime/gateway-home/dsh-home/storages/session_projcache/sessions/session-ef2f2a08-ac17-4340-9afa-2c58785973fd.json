@@ -1,0 +1,213 @@
+{
+  "version": 7,
+  "record": {
+    "identity": {
+      "formatVersion": 4,
+      "createdAt": 1791474185211,
+      "cwd": "D:\\Workspace\\dsh_android",
+      "isSeeded": false,
+      "inheritedEventCount": 0
+    },
+    "rows": {
+      "title": {
+        "ver": 1,
+        "seq": 23,
+        "val": "reply"
+      },
+      "titleInput": {
+        "ver": 3,
+        "seq": 23,
+        "val": {
+          "first": {
+            "seq": 8,
+            "text": "reply"
+          },
+          "count": 1,
+          "lastSeq": 8
+        }
+      },
+      "llmRetry": {
+        "ver": 1,
+        "seq": 23,
+        "val": {}
+      },
+      "sandboxMode": {
+        "ver": 1,
+        "seq": 23,
+        "val": "workspace-write"
+      },
+      "goal": {
+        "ver": 6,
+        "seq": 23,
+        "val": {
+          "current": null,
+          "seenGoalIds": [],
+          "failure": null
+        }
+      },
+      "plan": {
+        "ver": 3,
+        "seq": 23,
+        "val": {
+          "active": false,
+          "wanted": null,
+          "running": null,
+          "activeAtLastHeader": false
+        }
+      },
+      "tokenUsage": {
+        "ver": 2,
+        "seq": 23,
+        "val": {
+          "totals": {
+            "uncachedInputTokens": 538,
+            "outputTokens": 451,
+            "cacheReadTokens": 12032,
+            "cacheWriteTokens": 0
+          },
+          "last": {
+            "turn": 1,
+            "step": 2,
+            "buckets": {
+              "uncachedInputTokens": 282,
+              "outputTokens": 187,
+              "cacheReadTokens": 6272,
+              "cacheWriteTokens": 0
+            }
+          }
+        }
+      },
+      "contextPressure": {
+        "ver": 5,
+        "seq": 23,
+        "val": {
+          "surfaceTokens": 1691,
+          "contextWindow": 1000000,
+          "pressureTokens": 6554,
+          "sampledSurfaceTokens": 1512
+        }
+      },
+      "contextBreakdown": {
+        "ver": 5,
+        "seq": 23,
+        "val": {
+          "nodes": [
+            {
+              "seq": 7,
+              "heuristicTokens": 693,
+              "system": true
+            },
+            {
+              "seq": 8,
+              "heuristicTokens": 10,
+              "system": false
+            },
+            {
+              "seq": 9,
+              "heuristicTokens": 125,
+              "system": false
+            },
+            {
+              "seq": 10,
+              "heuristicTokens": 263,
+              "system": false
+            },
+            {
+              "seq": 15,
+              "heuristicTokens": 258,
+              "system": false
+            },
+            {
+              "seq": 17,
+              "heuristicTokens": 163,
+              "system": false
+            },
+            {
+              "seq": 21,
+              "heuristicTokens": 179,
+              "system": false
+            }
+          ],
+          "breakdown": {
+            "systemTokens": 693,
+            "toolsTokens": 4937,
+            "messageTokens": 998
+          }
+        }
+      },
+      "todos": {
+        "ver": 2,
+        "seq": 23,
+        "val": null
+      },
+      "turnBoundary": {
+        "ver": 2,
+        "seq": 23,
+        "val": {
+          "openTurnStartSeq": null,
+          "lastStepStartSeq": 19,
+          "lastStepBoundary": {
+            "kind": "end",
+            "seq": 22
+          },
+          "lastTurn": 1
+        }
+      },
+      "inbox": {
+        "ver": 1,
+        "seq": 23,
+        "val": {
+          "next-turn": [],
+          "next-step": []
+        }
+      },
+      "userQuestions": {
+        "ver": 2,
+        "seq": 23,
+        "val": {
+          "inheritedEventCount": 0,
+          "timed": false,
+          "questions": {
+            "active": [],
+            "settled": []
+          }
+        }
+      },
+      "subagentCatalog": {
+        "ver": 3,
+        "seq": 23,
+        "val": {
+          "inheritedEventCount": 0
+        }
+      },
+      "subagentTiming": {
+        "ver": 3,
+        "seq": 23,
+        "val": {
+          "descriptorSeen": false,
+          "settledMs": 0
+        }
+      },
+      "subagent": {
+        "ver": 2,
+        "seq": 23,
+        "val": {}
+      },
+      "subagentModelSelectionPolicy": {
+        "ver": 1,
+        "seq": 23,
+        "val": null
+      },
+      "permissions": {
+        "ver": 2,
+        "seq": 23,
+        "val": {
+          "preset": "workspace-write",
+          "sandbox": "workspace-write",
+          "approval": "ask",
+          "seeded": false
+        }
+      }
+    }
+  }
+}

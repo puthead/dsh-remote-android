@@ -1,0 +1,233 @@
+{
+  "version": 7,
+  "record": {
+    "identity": {
+      "formatVersion": 4,
+      "createdAt": 1791477640102,
+      "cwd": "D:\\Workspace\\dsh_android",
+      "isSeeded": false,
+      "inheritedEventCount": 0
+    },
+    "rows": {
+      "title": {
+        "ver": 1,
+        "seq": 33,
+        "val": "reply"
+      },
+      "titleInput": {
+        "ver": 3,
+        "seq": 33,
+        "val": {
+          "first": {
+            "seq": 8,
+            "text": "reply"
+          },
+          "count": 1,
+          "lastSeq": 8
+        }
+      },
+      "llmRetry": {
+        "ver": 1,
+        "seq": 33,
+        "val": {}
+      },
+      "sandboxMode": {
+        "ver": 1,
+        "seq": 33,
+        "val": "workspace-write"
+      },
+      "goal": {
+        "ver": 6,
+        "seq": 33,
+        "val": {
+          "current": null,
+          "seenGoalIds": [],
+          "failure": null
+        }
+      },
+      "plan": {
+        "ver": 3,
+        "seq": 33,
+        "val": {
+          "active": false,
+          "wanted": null,
+          "running": null,
+          "activeAtLastHeader": false
+        }
+      },
+      "tokenUsage": {
+        "ver": 2,
+        "seq": 33,
+        "val": {
+          "totals": {
+            "uncachedInputTokens": 4814,
+            "outputTokens": 1130,
+            "cacheReadTokens": 21376,
+            "cacheWriteTokens": 0
+          },
+          "last": {
+            "turn": 1,
+            "step": 3,
+            "buckets": {
+              "uncachedInputTokens": 1816,
+              "outputTokens": 508,
+              "cacheReadTokens": 9344,
+              "cacheWriteTokens": 0
+            }
+          }
+        }
+      },
+      "contextPressure": {
+        "ver": 5,
+        "seq": 33,
+        "val": {
+          "surfaceTokens": 4698,
+          "contextWindow": 1000000,
+          "pressureTokens": 11160,
+          "sampledSurfaceTokens": 4325
+        }
+      },
+      "contextBreakdown": {
+        "ver": 5,
+        "seq": 33,
+        "val": {
+          "nodes": [
+            {
+              "seq": 7,
+              "heuristicTokens": 693,
+              "system": true
+            },
+            {
+              "seq": 8,
+              "heuristicTokens": 10,
+              "system": false
+            },
+            {
+              "seq": 9,
+              "heuristicTokens": 125,
+              "system": false
+            },
+            {
+              "seq": 10,
+              "heuristicTokens": 263,
+              "system": false
+            },
+            {
+              "seq": 15,
+              "heuristicTokens": 263,
+              "system": false
+            },
+            {
+              "seq": 17,
+              "heuristicTokens": 140,
+              "system": false
+            },
+            {
+              "seq": 19,
+              "heuristicTokens": 1519,
+              "system": false
+            },
+            {
+              "seq": 23,
+              "heuristicTokens": 294,
+              "system": false
+            },
+            {
+              "seq": 25,
+              "heuristicTokens": 360,
+              "system": false
+            },
+            {
+              "seq": 27,
+              "heuristicTokens": 658,
+              "system": false
+            },
+            {
+              "seq": 31,
+              "heuristicTokens": 373,
+              "system": false
+            }
+          ],
+          "breakdown": {
+            "systemTokens": 693,
+            "toolsTokens": 4937,
+            "messageTokens": 4005
+          }
+        }
+      },
+      "todos": {
+        "ver": 2,
+        "seq": 33,
+        "val": null
+      },
+      "turnBoundary": {
+        "ver": 2,
+        "seq": 33,
+        "val": {
+          "openTurnStartSeq": null,
+          "lastStepStartSeq": 29,
+          "lastStepBoundary": {
+            "kind": "end",
+            "seq": 32
+          },
+          "lastTurn": 1
+        }
+      },
+      "inbox": {
+        "ver": 1,
+        "seq": 33,
+        "val": {
+          "next-turn": [],
+          "next-step": []
+        }
+      },
+      "userQuestions": {
+        "ver": 2,
+        "seq": 33,
+        "val": {
+          "inheritedEventCount": 0,
+          "timed": false,
+          "questions": {
+            "active": [],
+            "settled": []
+          }
+        }
+      },
+      "subagentCatalog": {
+        "ver": 3,
+        "seq": 33,
+        "val": {
+          "inheritedEventCount": 0
+        }
+      },
+      "subagentTiming": {
+        "ver": 3,
+        "seq": 33,
+        "val": {
+          "descriptorSeen": false,
+          "settledMs": 0
+        }
+      },
+      "subagent": {
+        "ver": 2,
+        "seq": 33,
+        "val": {}
+      },
+      "subagentModelSelectionPolicy": {
+        "ver": 1,
+        "seq": 33,
+        "val": null
+      },
+      "permissions": {
+        "ver": 2,
+        "seq": 33,
+        "val": {
+          "preset": "workspace-write",
+          "sandbox": "workspace-write",
+          "approval": "ask",
+          "seeded": false
+        }
+      }
+    }
+  }
+}
