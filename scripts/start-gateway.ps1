@@ -33,6 +33,7 @@ param(
     [string]$GatewayDir,
     [string]$Node,
     [string]$ConfigPath,
+    [string[]]$Env = @(),
     [switch]$Foreground,
     [int]$WaitSeconds = 30
 )
@@ -108,8 +109,21 @@ if ($portOwner -gt 0) {
 }
 
 Write-Section '3/4 启动网关'
+# -Env 用于隔离环境（例如 E2E 把 DSH_HOME 指到测试目录，绝不污染真实 ~/.dsh）。
+# 语法：-Env "K=V" -Env "K2=V2"（WMI 路线不继承调用方环境，必须显式 set）。
+$envPairs = New-Object System.Collections.ArrayList
+foreach ($item in @($Env)) {
+    if (-not $item) { continue }
+    $eq = $item.IndexOf('=')
+    if ($eq -le 0) { throw "-Env 需要 K=V 形式，收到：$item" }
+    [void]$envPairs.Add([pscustomobject]@{ Key = $item.Substring(0, $eq); Value = $item.Substring($eq + 1) })
+}
+if ($envPairs.Count -gt 0) {
+    Write-Kv -Key '注入环境变量' -Value (($envPairs | ForEach-Object { $_.Key }) -join ', ')
+}
 if ($Foreground) {
     Write-Info '前台模式运行（Ctrl+C 结束；不写 PID 文件）'
+    foreach ($pair in $envPairs) { [System.Environment]::SetEnvironmentVariable($pair.Key, $pair.Value, 'Process') }
     Write-Host ''
     & $nodeExe $gatewayEntry serve --config $ConfigPath --home $remoteHome
     exit $LASTEXITCODE
@@ -120,6 +134,9 @@ if (-not (Test-Path -LiteralPath $logsDir -PathType Container)) { [void](New-Ite
 $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
 $outLog = Join-Path $logsDir "gateway-console-$stamp.log"
 $errLog = Join-Path $logsDir "gateway-console-$stamp.err.log"
+# node 退出时把退出码写在这里：排查「网关进程悄悄没了」时能区分
+# 正常退出(0) / JS 崩溃(1) / 被 Ctrl+C 结束(3221225786 = 0xC000013A)。
+$exitLog = Join-Path $logsDir "gateway-exit-$stamp.log"
 
 function Quote-Arg {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -141,9 +158,18 @@ if ($Port -gt 0) { $arguments += @('--port', [string]$Port) }
 #   WMI 由 WmiPrvSE 创建进程，与当前会话完全解耦；cmd.exe 只负责 cd 与日志重定向，本体即刻退出。
 $launcherPid = 0
 $launchMode = ''
-$innerCommand = 'cd /d "' + (Split-Path -Parent $gatewayEntry) + '" && "' + $nodeExe + '" ' + ($arguments -join ' ') +
-    ' 1> "' + $outLog + '" 2> "' + $errLog + '"'
-$launchCommandLine = 'cmd.exe /c "' + $innerCommand + '"'
+$envPrefix = ''
+foreach ($pair in $envPairs) {
+    $envPrefix += 'set "' + $pair.Key + '=' + $pair.Value + '" && '
+}
+# 退出码记录必须用「延迟展开」（cmd /v:on + !VAR!）：
+#   cmd 在解析整行时就会把 %ERRORLEVEL% / %TIME% 展开成启动前的旧值与启动时刻，
+#   只有 !ERRORLEVEL! / !TIME! 才会在命令真正结束后取值 —— 否则记下来的是「启动时 = 0」这种假证据。
+# 取子串是为了只留 ASCII（!DATE! 在中文系统上带「周二」，会让记录文件变成 GBK 编码、与其它日志不一致）。
+$innerCommand = $envPrefix + 'cd /d "' + (Split-Path -Parent $gatewayEntry) + '" && "' + $nodeExe + '" ' + ($arguments -join ' ') +
+    ' 1> "' + $outLog + '" 2> "' + $errLog + '"' +
+    ' & echo [!DATE:~0,10! !TIME:~0,8!] node exit=!ERRORLEVEL! >> "' + $exitLog + '"'
+$launchCommandLine = 'cmd.exe /v:on /c "' + $innerCommand + '"'
 try {
     $createResult = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $launchCommandLine } -ErrorAction Stop
     if ($createResult.ReturnValue -eq 0 -and $createResult.ProcessId -gt 0) {
@@ -154,6 +180,7 @@ try {
     Write-Warn "WMI 分离启动不可用（$($_.Exception.Message)），回退 Start-Process。"
 }
 if ($launcherPid -le 0) {
+    if ($envPairs.Count -gt 0) { Write-Warn 'Start-Process 回退路线无法注入环境变量（-Env 会被忽略）；请改用 WMI 路线或 -Foreground。' }
     $proc = Start-Process -FilePath $nodeExe -ArgumentList $arguments -PassThru -WindowStyle Hidden `
         -WorkingDirectory (Split-Path -Parent $gatewayEntry) `
         -RedirectStandardOutput $outLog -RedirectStandardError $errLog
@@ -204,6 +231,7 @@ $pidRecord = [ordered]@{
     startedAt   = (Get-Date).ToString('o')
     stdoutLog   = $outLog
     stderrLog   = $errLog
+    exitLog     = $exitLog
     scriptPid   = $PID
 }
 Write-JsonFileNoBom -Path $pidPath -Object $pidRecord
@@ -216,6 +244,7 @@ Write-Kv -Key 'apiVersion' -Value ([string](Get-JsonProp -Object $health -Name '
 Write-Kv -Key 'PID 文件' -Value $pidPath
 Write-Kv -Key '控制台日志' -Value $outLog
 Write-Kv -Key '错误日志' -Value $errLog
+Write-Kv -Key '退出码记录' -Value $exitLog
 
 $homeArg = ''
 if ($DshRemoteHome) { $homeArg = " -Home `"$remoteHome`"" }

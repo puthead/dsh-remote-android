@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   dsh-remote PC 侧一键初始化：探测 DSH 环境 → 建运行目录 → 写凭据（UTF-8 无 BOM）→ 生成 config.json。
@@ -44,6 +44,7 @@ param(
     [string]$DshRoot,
     [string]$Node,
     [string]$DshBin,
+    [string]$Launcher,
     [int]$Port = 0,
     [int]$MaxConcurrent = 2,
     [int]$MaxQueue = 100,
@@ -199,6 +200,21 @@ if (-not $SkipProbe) {
     try { $foundBin = Find-DshBin -DshBin $DshBin -DshHome $env:DSH_HOME } catch { }
 }
 
+# ── DSH 启动器解析（契约 §8.2：旧版 bin.js 不支持 --json/--session-id）─────────
+$launcherInfo = $null
+try { $launcherInfo = Find-DshLauncher -Launcher $Launcher -DshRoot $foundRoot -Node $foundNode } catch { $launcherInfo = $null }
+if ($launcherInfo -and $launcherInfo.Mode -eq 'desktop-host') {
+    Write-Kv -Key 'DSH 启动器' -Value $launcherInfo.Launcher
+    Write-Kv -Key 'Harness exe' -Value $launcherInfo.Exe
+    Write-Kv -Key 'cli.js' -Value $launcherInfo.CliJs
+} elseif ($launcherInfo -and $launcherInfo.Mode -eq 'legacy-node') {
+    Write-Warn '只探测到旧版 CLI（bin.js）：它不支持 --json / --session-id，v2 续聊会失败（契约 §8.2）。'
+    Write-Info "旧版路径：$($launcherInfo.LegacyBinPath)"
+    Write-Info '修复：安装/定位 dsh.cmd，然后用 -Launcher "<...>\runtime\cli\bin\dsh.cmd" 重新运行本脚本。'
+} else {
+    Write-Warn '未探测到 DSH 启动器（dsh.cmd/dsh.exe）；v2 续聊需要在 config.json 里补 dsh.launcher（或用 -Launcher 指定）。'
+}
+
 Write-Section '2/6 创建运行目录'
 $tasksDir = Join-Path $remoteHome 'tasks'
 $logsDir = Join-Path $remoteHome 'logs'
@@ -287,7 +303,7 @@ if ($incomingKey) {
 Write-Section '4/6 生成 config.json'
 $configPath = Join-Path $remoteHome 'config.json'
 $existingConfig = Get-ConfigDefaults -Home $remoteHome
-$configParams = @('Port', 'BindHost', 'MaxConcurrent', 'MaxQueue', 'TimeoutSec', 'MaxTimeoutSec', 'Workspace', 'ServerName', 'Node', 'DshBin', 'DshRoot')
+$configParams = @('Port', 'BindHost', 'MaxConcurrent', 'MaxQueue', 'TimeoutSec', 'MaxTimeoutSec', 'Workspace', 'ServerName', 'Node', 'DshBin', 'DshRoot', 'Launcher')
 $boundConfigParams = @($configParams | Where-Object { $PSBoundParameters.ContainsKey($_) })
 $effectivePort = $script:DefaultPort
 if ($Port -gt 0) { $effectivePort = $Port }
@@ -356,7 +372,23 @@ if ($shouldWriteConfig) {
         maxTimeoutSec         = $MaxTimeoutSec
         workspaceAllowlist    = @($workspaces)
         defaultWorkspace      = $workspaces[0]
+        # 电脑端通道（审批/提问，契约 §7.7）。**缺省即启用**，只有 enabled=false 才关闭；
+        # 这里显式写全是为了：①dshHome 指到真实桌面端 home（凭据 client-connection/browser-session
+        # 就在那里），避免指成网关自己的 home 后只能得到一句「找不到电脑端凭据」；
+        # ②把"审批从哪来"写进配置，排查时不必再猜默认值。
+        desktop               = [ordered]@{
+            enabled = $true
+            host    = '127.0.0.1'
+            port    = 19387
+            dshHome = $(if ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.dsh' } else { $null })
+        }
         dsh                   = [ordered]@{
+            # v2（契约 §7.2/§8.2）：续聊必须用 desktop-host 启动器形状，而不是旧版 bin.js
+            launcher          = $(if ($launcherInfo) { $launcherInfo.Launcher } else { $null })
+            exe               = $(if ($launcherInfo) { $launcherInfo.Exe } else { $null })
+            cliJs             = $(if ($launcherInfo) { $launcherInfo.CliJs } else { $null })
+            env               = $(if ($launcherInfo -and $launcherInfo.Env) { $launcherInfo.Env } else { @{} })
+            # v1 兼容键：保持原行为（网关 v2 会优先用 launcher/exe/cliJs）
             node              = $foundNode
             binPath           = $foundBin
             profile           = 'headless'
@@ -411,6 +443,12 @@ $failCount = 0
 if ($gatewayEntry) { Write-Ok '网关源码就绪（tools/dsh-remote/gateway.mjs）' } else { Write-Fail '网关源码缺失：请先完成 task-1'; $failCount++ }
 if ($foundNode) { Write-Ok "node.exe 可用：$foundNode" } else { Write-Fail 'node.exe 不可用'; $failCount++ }
 if ($foundBin) { Write-Ok "dsh CLI 就绪：$foundBin" } else { Write-Fail 'dsh CLI 缺失'; $failCount++ }
+if ($launcherInfo -and $launcherInfo.Mode -eq 'desktop-host') {
+    Write-Ok "DSH 启动器就绪（desktop-host）：$($launcherInfo.Launcher)"
+} elseif (Test-LegacyDshBinPath -Path $foundBin) {
+    Write-Warn 'dsh.binPath 指向旧版 CLI：v1 任务可用，但 v2 续聊需要 dsh.launcher（见契约 §8.2）。'
+    Write-Info '修复：powershell -File scripts/setup-pc.ps1 -Launcher "<DSH 安装>\resources\runtime\cli\bin\dsh.cmd"'
+}
 $credFinal = Test-CredentialFile -Path $credPath
 if ($credFinal.Ok) { Write-Ok '凭据文件合规（单行 / UTF-8 无 BOM / 可解析）' } else { Write-Fail ('凭据文件不合规：' + ($credFinal.Reasons -join '；')); $failCount++ }
 if (Test-Path -LiteralPath $configPath -PathType Leaf) { Write-Ok 'config.json 存在且可解析' } else { Write-Fail 'config.json 缺失'; $failCount++ }

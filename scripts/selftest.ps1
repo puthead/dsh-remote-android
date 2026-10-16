@@ -47,6 +47,11 @@ param(
     [string]$Node,
     [string]$DshBin,
     [string]$GatewayDir,
+    [Alias('RelayHome')][string]$DshRelayHome,
+    [int]$RelayPort = 0,
+    [string]$RelayDir,
+    [switch]$SkipV2,
+    [string]$ReadonlySnapshot,
     [int]$TaskTimeoutSec = 300,
     [string]$Prompt,
     [switch]$SkipTask,
@@ -80,7 +85,7 @@ Write-Banner -Title 'dsh-remote 一键自检（selftest.ps1）' -SubTitle ("Powe
 $remoteHome = Resolve-DshRemoteHome -Home $DshRemoteHome
 if (-not $GatewayDir) { $GatewayDir = Get-DefaultGatewayDir }
 
-Write-Section '1/7 运行目录与配置'
+Write-Section '1/10 运行目录与配置'
 Write-Kv -Key '运行目录' -Value $remoteHome
 $config = $null
 $configPath = Join-Path $remoteHome 'config.json'
@@ -109,7 +114,12 @@ try {
     Write-Warn $_.Exception.Message
 }
 
-Write-Section '2/7 node.exe'
+# 镜像只读红线：**先快照**，跑完全部检查后再比对（原子流程，避免"旧基线"结论变弱）
+$readonlyChecker = Join-Path (Join-Path $PSScriptRoot 'tests') 'check-real-dsh-readonly.mjs'
+if (-not $ReadonlySnapshot) { $ReadonlySnapshot = Join-Path (Get-AcceptanceDir) 'real-dsh-baseline.json' }
+Write-Kv -Key '只读基线' -Value $ReadonlySnapshot
+
+Write-Section '2/10 node.exe'
 $nodeExe = $Node
 if (-not $nodeExe -and $config) {
     $dshSection = Get-JsonProp -Object $config -Name 'dsh'
@@ -132,7 +142,7 @@ if (-not $nodeExe) {
     }
 }
 
-Write-Section '3/7 dsh CLI'
+Write-Section '3/10 dsh CLI'
 $dshBinPath = $DshBin
 if (-not $dshBinPath -and $config) {
     $dshSection2 = Get-JsonProp -Object $config -Name 'dsh'
@@ -157,7 +167,7 @@ if (-not $dshBinPath) {
     }
 }
 
-Write-Section '4/7 凭据文件（UTF-8 无 BOM / 单行）'
+Write-Section '4/10 凭据文件（UTF-8 无 BOM / 单行）'
 $credPath = Join-Path $remoteHome '.credentials.yaml'
 if (-not (Test-Path -LiteralPath $credPath -PathType Leaf)) {
     Add-Result -Name '凭据文件合规' -Status 'FAIL' -Detail "不存在：$credPath（请运行 scripts/setup-pc.ps1 写入）"
@@ -179,7 +189,7 @@ if (-not (Test-Path -LiteralPath $credPath -PathType Leaf)) {
     }
 }
 
-Write-Section '5/7 网关健康'
+Write-Section '5/10 网关健康'
 $health = Get-GatewayHealth -BaseUrl $baseUrlResolved -TimeoutSec 6
 if (-not $health) {
     Add-Result -Name '网关健康（/api/v1/health）' -Status 'FAIL' `
@@ -197,7 +207,7 @@ if (-not $health) {
     }
 }
 
-Write-Section '6/7 配对链路（pair/open → pair/claim）'
+Write-Section '6/10 配对链路（pair/open → pair/claim）'
 $pair = $null
 if (-not $health) {
     Add-Result -Name '配对链路可用' -Status 'SKIP' -Detail '网关不可达'
@@ -212,7 +222,7 @@ if (-not $health) {
     }
 }
 
-Write-Section '7/7 端到端真实任务'
+Write-Section '7/10 端到端真实任务'
 $taskId = $null
 $workspaceDir = $Workspace
 if (-not $workspaceDir -and $config) { $workspaceDir = [string](Get-JsonProp -Object $config -Name 'defaultWorkspace' -Default '') }
@@ -306,6 +316,101 @@ if ($SkipTask) {
         }
     } catch {
         Add-Result -Name '端到端真实任务' -Status 'FAIL' -Detail $_.Exception.Message
+    }
+}
+
+Write-Section '8/10 DSH 启动器（v2 续聊前提，契约 §8.2）'
+$launcherInfo = $null
+try { $launcherInfo = Find-DshLauncher } catch { $launcherInfo = $null }
+if ($SkipV2) {
+    Add-Result -Name 'DSH 启动器可解析' -Status 'SKIP' -Detail '已指定 -SkipV2'
+} elseif (-not $launcherInfo -or $launcherInfo.Mode -eq 'unknown') {
+    Add-Result -Name 'DSH 启动器可解析' -Status 'SKIP' -Detail '未探测到 dsh.cmd/dsh.exe（v1 任务不受影响；v2 续聊需要它，可用 -Launcher 指定）'
+} elseif ($launcherInfo.Mode -eq 'desktop-host') {
+    Add-Result -Name 'DSH 启动器可解析' -Status 'PASS' -Detail ("desktop-host：$($launcherInfo.Launcher) → $($launcherInfo.Exe) --expose-internals $($launcherInfo.CliJs)")
+} else {
+    Add-Result -Name 'DSH 启动器可解析' -Status 'FAIL' -Detail $launcherInfo.Note
+}
+
+Write-Section '9/10 中继（relay）'
+if ($SkipV2) {
+    Add-Result -Name '中继源码就绪' -Status 'SKIP' -Detail '已指定 -SkipV2'
+} else {
+    $relayEntryPath = Get-RelayEntryPath -RelayDir $RelayDir
+    if (-not (Test-Path -LiteralPath $relayEntryPath -PathType Leaf)) {
+        Add-Result -Name '中继源码就绪' -Status 'FAIL' -Detail "找不到 $relayEntryPath（task-1 产物）"
+    } else {
+        Add-Result -Name '中继源码就绪' -Status 'PASS' -Detail $relayEntryPath
+        # RFC 6455 官方向量（能直接抓出 WS_GUID 常量写错这类"自洽却错"的互操作缺陷）
+        $rfcChecker = Join-Path (Join-Path $PSScriptRoot 'tests') 'relay-rfc-check.mjs'
+        if ($nodeExe -and (Test-Path -LiteralPath $rfcChecker -PathType Leaf)) {
+            try {
+                $rfcRun = Invoke-NativeCommand -FilePath $nodeExe -ArgumentList @($rfcChecker) -TimeoutSec 60
+                $rfcJson = $null
+                try { $rfcJson = ($rfcRun.StdOut.Trim() | ConvertFrom-Json) } catch { $rfcJson = $null }
+                if ($rfcRun.ExitCode -eq 0 -and $rfcJson -and (Get-JsonProp -Object $rfcJson -Name 'ok') -eq $true) {
+                    Add-Result -Name '中继 WS 握手符合 RFC 6455' -Status 'PASS' -Detail ("computeAccept('dGhlIHNhbXBsZSBub25jZQ==') = s3pPLMBiTxaQ9kYGzzhZRbK+xOo=，GUID=" + [string](Get-JsonProp -Object $rfcJson -Name 'guid'))
+                } else {
+                    Add-Result -Name '中继 WS 握手符合 RFC 6455' -Status 'FAIL' -Detail ("期望 s3pPLMBiTxaQ9kYGzzhZRbK+xOo=，实际 " + [string](Get-JsonProp -Object $rfcJson -Name 'actual') + "（GUID=" + [string](Get-JsonProp -Object $rfcJson -Name 'guid') + "）→ 标准 WS 客户端会拒绝握手")
+                }
+            } catch {
+                Add-Result -Name '中继 WS 握手符合 RFC 6455' -Status 'FAIL' -Detail $_.Exception.Message
+            }
+        }
+        $relayHomeResolved = Resolve-RelayHome -Home $DshRelayHome
+        $relayCfg = Get-ConfigDefaults -Home $relayHomeResolved
+        $effectiveRelayPort = [int](Get-JsonProp -Object $relayCfg -Name 'port' -Default $script:DefaultRelayPort)
+        if ($RelayPort -gt 0) { $effectiveRelayPort = $RelayPort }
+        $relayBase = Get-RelayBaseUrl -Home $relayHomeResolved -Port $effectiveRelayPort
+        $relayHealth = Get-RelayHealth -BaseUrl $relayBase -TimeoutSec 4
+        if ($relayHealth) {
+            Add-Result -Name '中继健康（/health）' -Status 'PASS' -Detail ("$relayBase/health → relayVersion=$([string](Get-JsonProp -Object $relayHealth -Name 'relayVersion')) apiVersion=$([string](Get-JsonProp -Object $relayHealth -Name 'apiVersion')) homes=$([string](Get-JsonProp -Object $relayHealth -Name 'homes')) devices=$([string](Get-JsonProp -Object $relayHealth -Name 'devices'))")
+        } else {
+            Add-Result -Name '中继健康（/health）' -Status 'SKIP' -Detail "未运行：$relayBase/health 无响应（启动：powershell -File scripts/start-relay.ps1 -Home `"$relayHomeResolved`"）"
+        }
+    }
+}
+
+Write-Section '10/10 网关 v2（relay 状态 + 会话镜像 + 只读红线）'
+if ($SkipV2) {
+    Add-Result -Name '网关 v2 路由' -Status 'SKIP' -Detail '已指定 -SkipV2'
+} elseif (-not $health) {
+    Add-Result -Name '网关 v2 路由' -Status 'SKIP' -Detail '网关不可达'
+} else {
+    $relayStatus = Get-GatewayRelayStatus -BaseUrl $baseUrlResolved -TimeoutSec 6
+    if (-not $relayStatus) {
+        $probe = Invoke-DshV2Api -BaseUrl $baseUrlResolved -Path '/api/v2/relay/status' -TimeoutSec 6
+        Add-Result -Name '网关 v2 路由' -Status 'FAIL' -Detail ("GET /api/v2/relay/status → HTTP $($probe.Status)（v2 路由未实现）")
+    } else {
+        Add-Result -Name '网关 v2 路由' -Status 'PASS' -Detail ("/api/v2/relay/status → enabled=$([string](Get-JsonProp -Object $relayStatus -Name 'enabled')) connected=$([string](Get-JsonProp -Object $relayStatus -Name 'connected')) reconnects=$([string](Get-JsonProp -Object $relayStatus -Name 'reconnects')) lastError=$([string](Get-JsonProp -Object $relayStatus -Name 'lastError'))")
+        if ($pair) {
+            $sessions = Invoke-DshV2Api -BaseUrl $baseUrlResolved -Path '/api/v2/sessions?limit=5' -Token $pair.Token -TimeoutSec 20
+            $sessionCount = -1
+            try { $sessionCount = @((($sessions.Text | ConvertFrom-Json).sessions)).Count } catch { $sessionCount = -1 }
+            if ($sessions.Ok -and $sessionCount -ge 0) {
+                Add-Result -Name '会话镜像（/api/v2/sessions）' -Status 'PASS' -Detail ("HTTP $($sessions.Status)，返回会话 $sessionCount 条（镜像只读 + 手机任务）")
+            } else {
+                Add-Result -Name '会话镜像（/api/v2/sessions）' -Status 'FAIL' -Detail ("HTTP $($sessions.Status)：" + (Get-ApiErrorMessage -Result $sessions))
+            }
+        } else {
+            Add-Result -Name '会话镜像（/api/v2/sessions）' -Status 'SKIP' -Detail '配对未成功，缺少设备令牌'
+        }
+    }
+    # 镜像只读红线：与 §1 的快照比对（文件系统事实，不调用网关代码）
+    if ($nodeExe -and (Test-Path -LiteralPath $readonlyChecker -PathType Leaf)) {
+        try {
+            $roRun = Invoke-NativeCommand -FilePath $nodeExe -ArgumentList @($readonlyChecker, '--snapshot', $ReadonlySnapshot) -TimeoutSec 180
+            $roTail = @($roRun.StdOut -split "`r?`n" | Where-Object { $_ -match '判据|PASS|FAIL' }) -join '；'
+            if ($roRun.ExitCode -eq 0) {
+                Add-Result -Name '镜像只读红线（独立复核）' -Status 'PASS' -Detail $roTail
+            } else {
+                Add-Result -Name '镜像只读红线（独立复核）' -Status 'FAIL' -Detail $roTail
+            }
+        } catch {
+            Add-Result -Name '镜像只读红线（独立复核）' -Status 'SKIP' -Detail ("复核脚本执行失败：" + $_.Exception.Message)
+        }
+    } else {
+        Add-Result -Name '镜像只读红线（独立复核）' -Status 'SKIP' -Detail '缺少 node.exe 或 tests/check-real-dsh-readonly.mjs'
     }
 }
 

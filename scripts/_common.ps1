@@ -558,7 +558,9 @@ function Invoke-DshApi {
         [ValidateSet('GET', 'POST', 'DELETE', 'PUT', 'HEAD')][string]$Method = 'GET',
         [System.Collections.IDictionary]$Headers = $null,
         [string]$Body = $null,
-        [int]$TimeoutSec = 30
+        [int]$TimeoutSec = 30,
+        [string]$ApiVersion,
+        [switch]$Insecure
     )
     $request = [System.Net.HttpWebRequest]::Create($Url)
     $request.Method = $Method
@@ -568,14 +570,27 @@ function Invoke-DshApi {
     $request.UserAgent = 'dsh-remote-scripts/1.0'
     $request.AllowAutoRedirect = $true
     $request.ContentType = 'application/json; charset=utf-8'
-    $request.Headers.Add('X-Api-Version', $script:ApiVersion)
+    $request.Headers.Add('X-Api-Version', $(if ($ApiVersion) { $ApiVersion } else { $script:ApiVersion }))
+    # -Insecure 只用于「本机自签证书」或「只绑公网 IP 的证书」的回环验证场景；手机 App 无自签信任开关
+    # （需求 FR-15/O8），release 变体必须能走系统信任链，故生产校验不得依赖 -Insecure。
+    if ($Insecure) {
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 } catch { }
+    }
     if ($Headers) {
         foreach ($key in $Headers.Keys) {
             if ([string]$key -ieq 'Content-Type') { continue }
             $request.Headers.Add([string]$key, [string]$Headers[$key])
         }
     }
-    if ($PSBoundParameters.ContainsKey('Body') -and $null -ne $Body) {
+    # 注意：PowerShell 会把显式传入的 $null 转成空字符串（[string] 参数的既有行为），
+    # 所以「有 Body」的判据必须同时排除空串，否则 GET 会去 GetRequestStream() 并抛
+    # ProtocolViolationException（Cannot send a content-body with this verb-type）。
+    $hasBody = $PSBoundParameters.ContainsKey('Body') -and $null -ne $Body -and ([string]$Body) -ne ''
+    if ($hasBody -and ($Method -eq 'GET' -or $Method -eq 'HEAD')) {
+        throw "GET/HEAD 请求不能携带请求体（Body）：$Url"
+    }
+    if ($hasBody) {
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $request.ContentLength = $bytes.Length
         $stream = $request.GetRequestStream()
@@ -984,4 +999,635 @@ function Test-PowerShellEdition {
     $v = $PSVersionTable.PSVersion
     $edition = if ($v.Major -ge 6) { 'PowerShell (Core)' } else { 'Windows PowerShell' }
     return ("$edition $v")
+}
+
+# ── v2：中继（relay）与跨网络验证 ─────────────────────────────────────────────
+#
+# 本段的函数服务于 docs/01-设计/协议契约-v2.md §2/§3/§6：
+#   * 中继源码/运行目录/配置/PID/健康检查（setup-relay / start-relay / stop-relay）
+#   * netstat 监听断言、TCP 直连失败断言（e2e 判据 A / C）
+#   * 分离启动任意命令（WMI + scripts/tests/detached-run.mjs，支持环境变量注入）
+
+$script:DefaultRelayPort = 9443
+$script:DefaultRelayName = 'relay.local'
+$script:RelayApiVersion = '2'
+$script:DefaultRelayHomeDirName = 'relay-home'
+
+function Get-DefaultRelayDir {
+    return (Join-Path (Join-Path (Get-RepoRoot) 'tools') 'dsh-relay')
+}function Get-RelayEntryPath {
+    [CmdletBinding()]
+    param([string]$RelayDir)
+    if (-not $RelayDir) { $RelayDir = Get-DefaultRelayDir }
+    return (Join-Path $RelayDir 'relay.mjs')
+}
+
+function Test-RelaySourceReady {
+    [CmdletBinding()]
+    param([string]$RelayDir)
+    return (Test-Path -LiteralPath (Get-RelayEntryPath -RelayDir $RelayDir) -PathType Leaf)
+}
+
+function Assert-RelaySource {
+    <#
+      中继源码就绪校验：tools/dsh-relay/relay.mjs 必须存在（task-1 产物）。
+      未就绪时抛出带「尚未实现」字样的明确错误 —— 脚本必须显式报阻塞，不得静默失败。
+    #>
+    [CmdletBinding()]
+    param([string]$RelayDir)
+    $entry = Get-RelayEntryPath -RelayDir $RelayDir
+    if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+        throw ("中继源码尚未实现：找不到 $entry`n" +
+               "  契约见 docs/01-设计/协议契约-v2.md §2/§3（relay.mjs + lib/*.mjs + config.example.json）。`n" +
+               "  在中继实现就绪前，涉及中继的判据只能记为 BLOCKED，不得伪造结果。")
+    }
+    return $entry
+}
+
+function Get-RelayExampleConfigPath {
+    [CmdletBinding()]
+    param([string]$RelayDir)
+    if (-not $RelayDir) { $RelayDir = Get-DefaultRelayDir }
+    return (Join-Path $RelayDir 'config.example.json')
+}
+
+function Resolve-RelayHome {
+    <#
+      中继运行目录（配置 + PID + 证书 + 日志的根）。
+      优先级：-Home 参数 > 环境变量 DSH_RELAY_HOME > <仓库>\.runtime\relay-home
+    #>
+    [CmdletBinding()]
+    param([Alias('Home')][string]$RelayHome)
+    if ($RelayHome) { return [System.IO.Path]::GetFullPath($RelayHome) }
+    if ($env:DSH_RELAY_HOME) { return [System.IO.Path]::GetFullPath($env:DSH_RELAY_HOME) }
+    return (Join-Path (Get-RepoRoot) (Join-Path '.runtime' $script:DefaultRelayHomeDirName))
+}
+
+function New-RandomSecret {
+    <#
+      Base64Url 随机口令/令牌（32 字节 → 43 字符），与契约 §1 的 homeToken/deviceToken 形状一致。
+    #>
+    [CmdletBinding()]
+    param([int]$Bytes = 32)
+    $buf = [byte[]]::new($Bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($buf) } finally { $rng.Dispose() }
+    return ([Convert]::ToBase64String($buf)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Get-RelayConfigPath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][Alias('Home')][string]$RelayHome)
+    return (Join-Path $RelayHome 'config.json')
+}
+
+function Get-RelayPidFilePath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][Alias('Home')][string]$RelayHome)
+    return (Join-Path $RelayHome 'relay.pid.json')
+}
+
+function Read-RelayPidInfo {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][Alias('Home')][string]$RelayHome)
+    $path = Get-RelayPidFilePath -Home $RelayHome
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try { return (Read-JsonFile -Path $path) } catch { return $null }
+}
+
+function Get-RelayBaseUrl {
+    <#
+      由运行目录的 config.json 推导中继本机地址：tls.mode=off → http://127.0.0.1:<port>，否则 https://。
+    #>
+    [CmdletBinding()]
+    param([Alias('Home')][string]$RelayHome, [int]$Port = 0, [switch]$PlainHttp)
+    $effectivePort = $script:DefaultRelayPort
+    $tlsMode = 'off'
+    if ($RelayHome) {
+        $config = Get-ConfigDefaults -Home $RelayHome
+        if ($config) {
+            $cfgPort = Get-JsonProp -Object $config -Name 'port'
+            if ($cfgPort) { $effectivePort = [int]$cfgPort }
+            $tls = Get-JsonProp -Object $config -Name 'tls'
+            $mode = [string](Get-JsonProp -Object $tls -Name 'mode' -Default 'off')
+            if ($mode) { $tlsMode = $mode }
+        }
+    }
+    if ($Port -gt 0) { $effectivePort = $Port }
+    $scheme = 'https'
+    if ($PlainHttp -or $tlsMode -eq 'off') { $scheme = 'http' }
+    return ("$scheme`://127.0.0.1:$effectivePort")
+}
+
+function Get-RelayHealth {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$BaseUrl, [int]$TimeoutSec = 5, [switch]$Insecure)
+    try {
+        $r = Invoke-DshApi -Url ($BaseUrl.TrimEnd('/') + '/health') -Method GET -TimeoutSec $TimeoutSec `
+            -ApiVersion $script:RelayApiVersion -Insecure:$Insecure
+        if ($r.Ok) { return $r.Json }
+        return $null
+    } catch { return $null }
+}
+
+function Wait-RelayHealth {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [int]$TimeoutSec = 20,
+        [int]$IntervalMs = 400,
+        [switch]$Insecure
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $h = Get-RelayHealth -BaseUrl $BaseUrl -TimeoutSec 3 -Insecure:$Insecure
+        if ($h) { return $h }
+        Start-Sleep -Milliseconds $IntervalMs
+    }
+    return $null
+}
+
+function ConvertTo-RelayTunnelWsUrl {
+    <#
+      http(s)://host:port → ws(s)://host:port/api/v2/tunnel/<role>（契约 §3）。
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$BaseUrl, [ValidateSet('home', 'device')][string]$Role = 'device')
+    $text = $BaseUrl.TrimEnd('/')
+    if ($text -like 'https://*') { $text = 'wss://' + $text.Substring(8) }
+    elseif ($text -like 'http://*') { $text = 'ws://' + $text.Substring(7) }
+    return ($text + '/api/v2/tunnel/' + $Role)
+}
+
+function Get-LanIPv4Addresses {
+    <#
+      本机非回环 IPv4 列表（判据 A：手机/局域网地址打 8787 必须失败）。
+    #>
+    [CmdletBinding()]
+    param()
+    $result = New-Object System.Collections.ArrayList
+    try {
+        foreach ($ip in @([System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()))) {
+            if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+            $s = $ip.ToString()
+            if ($s -ne '127.0.0.1' -and $s -notlike '169.254.*' -and -not $result.Contains($s)) { [void]$result.Add($s) }
+        }
+    } catch { }
+    return @($result)
+}
+
+function Test-TcpConnect {
+    <#
+      裸 TCP 连接测试（不带业务语义）。返回 [pscustomobject]@{ Connected; Error; ElapsedMs }。
+      判据 A 用它证明「局域网地址 + 8787 连不上」。
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetHost,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [int]$TimeoutMs = 3000
+    )
+    $client = New-Object System.Net.Sockets.TcpClient
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $connected = $false
+    $errorText = ''
+    try {
+        $iar = $client.BeginConnect($TargetHost, $Port, $null, $null)
+        $signaled = $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+        if ($signaled) {
+            try { $client.EndConnect($iar); $connected = $true }
+            catch { $errorText = $_.Exception.Message }
+        } else {
+            $errorText = "连接超时（${TimeoutMs}ms 内未建立）"
+        }
+    } catch {
+        $errorText = $_.Exception.Message
+    } finally {
+        try { $client.Close() } catch { }
+    }
+    $sw.Stop()
+    return [pscustomobject]@{ Connected = $connected; Error = $errorText; ElapsedMs = [int]$sw.ElapsedMilliseconds }
+}
+
+function Get-NetstatTcpSnapshot {
+    <#
+      执行 `netstat -ano -p tcp` 并解析（判据 C 的实测证据）。
+      返回 [pscustomobject]@{ ExitCode; CommandLine; Raw; Entries }。
+    #>
+    [CmdletBinding()]
+    param()
+    $netstat = Join-Path $env:SystemRoot 'System32\netstat.exe'
+    if (-not (Test-Path -LiteralPath $netstat -PathType Leaf)) { throw "找不到 netstat.exe：$netstat" }
+    $run = Invoke-NativeCommand -FilePath $netstat -ArgumentList @('-ano', '-p', 'tcp') -TimeoutSec 60
+    $entries = New-Object System.Collections.ArrayList
+    foreach ($line in @($run.StdOut -split "`r?`n")) {
+        $m = [regex]::Match($line, '^\s*TCP\s+(\S+):(\d+)\s+(\S+):(\d+)\s+(\S+)\s+(\d+)\s*$')
+        if (-not $m.Success) { continue }
+        [void]$entries.Add([pscustomobject]@{
+                Line          = $line.Trim()
+                LocalAddress  = $m.Groups[1].Value
+                LocalPort     = [int]$m.Groups[2].Value
+                RemoteAddress = $m.Groups[3].Value
+                RemotePort    = [int]$m.Groups[4].Value
+                State         = $m.Groups[5].Value
+                Pid           = [int]$m.Groups[6].Value
+            })
+    }
+    return [pscustomobject]@{
+        ExitCode    = $run.ExitCode
+        CommandLine = $run.CommandLine
+        Raw         = $run.StdOut
+        Entries     = @($entries)
+    }
+}
+
+function Invoke-DshV2Api {
+    <#
+      网关 v2 API 调用（自动带 X-Api-Version: 2 与可选 Bearer 令牌）。
+      HTTP 4xx/5xx 不抛异常，交由调用方读 Status / Json.error。
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [ValidateSet('GET', 'POST', 'DELETE', 'PUT', 'HEAD')][string]$Method = 'GET',
+        [string]$Token,
+        [string]$Body,
+        [int]$TimeoutSec = 30
+    )
+    $headers = @{}
+    if ($Token) { $headers['Authorization'] = "Bearer $Token" }
+    $url = $BaseUrl.TrimEnd('/') + '/' + $Path.TrimStart('/')
+    $splat = @{
+        Url        = $url
+        Method     = $Method
+        Headers    = $headers
+        TimeoutSec = $TimeoutSec
+        ApiVersion = $script:RelayApiVersion
+    }
+    if ($PSBoundParameters.ContainsKey('Body') -and -not [string]::IsNullOrEmpty($Body)) { $splat['Body'] = $Body }
+    return (Invoke-DshApi @splat)
+}
+
+function Get-GatewayRelayStatus {
+    <#
+      GET /api/v2/relay/status（仅回环）。未实现时返回 $null（不抛异常），由调用方判定 BLOCKED。
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$BaseUrl, [int]$TimeoutSec = 5)
+    $r = Invoke-DshV2Api -BaseUrl $BaseUrl -Path '/api/v2/relay/status' -TimeoutSec $TimeoutSec
+    if ($r.Ok) { return $r.Json }
+    return $null
+}
+
+function Get-PowerShellExePath {
+    [CmdletBinding()]
+    param()
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $ps -PathType Leaf) { return $ps }
+    $cmd = Get-Command powershell -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd -and $cmd.Source) { return $cmd.Source }
+    return $null
+}
+
+function Invoke-DshScript {
+    <#
+      调用另一个 PowerShell 脚本并捕获输出（供 e2e 串联 start/stop 脚本，保留真实输出文本作为证据）。
+      用 -Command 包一层而不是 -File：强制子进程把控制台输出编码设为 UTF-8，
+      否则中文在管道里会按 ANSI(GBK) 写出，而调用方按 UTF-8 解码 → 乱码。
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [string[]]$Arguments = @(),
+        [int]$TimeoutSec = 300
+    )
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) { throw "脚本不存在：$ScriptPath" }
+    $ps = Get-PowerShellExePath
+    if (-not $ps) { throw '找不到 powershell.exe（Windows PowerShell 5.1），无法调用脚本。' }
+    $quoted = New-Object System.Collections.ArrayList
+    foreach ($a in @($Arguments)) {
+        $text = [string]$a
+        # 参数名（-Foo）必须保持裸写法，否则会被当成位置参数；只给「值」加引号。
+        if ($text -match '^-[A-Za-z]') { [void]$quoted.Add($text); continue }
+        if ($text -match '[\s''"]' -or $text -eq '') { [void]$quoted.Add("'" + $text.Replace("'", "''") + "'") }
+        else { [void]$quoted.Add($text) }
+    }
+    $command = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; & '" + $ScriptPath.Replace("'", "''") + "'"
+    if ($quoted.Count -gt 0) { $command += ' ' + ($quoted -join ' ') }
+    $full = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+    return (Invoke-NativeCommand -FilePath $ps -ArgumentList $full -TimeoutSec $TimeoutSec)
+}
+
+function Get-AcceptanceDir {
+    <#
+      证据目录：<仓库>\.runtime\acceptance（.runtime 已在 .gitignore 中，不会入库）。
+    #>
+    [CmdletBinding()]
+    param([string]$SubDir)
+    $dir = Join-Path (Join-Path (Get-RepoRoot) '.runtime') 'acceptance'
+    if ($SubDir) { $dir = Join-Path $dir $SubDir }
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { [void](New-Item -ItemType Directory -Force -Path $dir) }
+    return $dir
+}
+
+function Read-JsonLinesFile {
+    <#
+      读 NDJSON（手机模拟器事件流）。非法行跳过，不抛异常。
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $items = New-Object System.Collections.ArrayList
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
+    $text = $null
+    try {
+        $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    } catch {
+        # 写入方可能以独占方式持有文件（例如 Node 的长连接 write stream 会让
+        # File.ReadAllText 抛「正由另一进程使用」）。回退到 FileShare.ReadWrite，
+        # 保证「边写边读」不会失败——否则 D/E 判据会假失败。
+        try {
+            $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            try {
+                $reader = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+                try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            } finally { $fs.Dispose() }
+        } catch { return @() }
+    }
+    if ($null -eq $text) { return @() }
+    foreach ($line in @($text -split "`r?`n")) {
+        $t = $line.Trim()
+        if (-not $t) { continue }
+        try { [void]$items.Add(($t | ConvertFrom-Json)) } catch { }
+    }
+    return @($items)
+}
+
+function Wait-JsonLineMatch {
+    <#
+      轮询 NDJSON 文件，直到出现满足条件的行。返回匹配到的对象；超时返回 $null。
+      -Kind  / -Name 用于筛选事件的 kind / name 字段；-Pattern 为正则（对整行文本）。
+      -Skip 跳过前 N 行：用于「某个动作之后才出现的行」这类断言（动作前先记下当前行数）。
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Kind,
+        [string]$Name,
+        [string]$Pattern,
+        [int]$Skip = 0,
+        [int]$TimeoutSec = 30,
+        [int]$IntervalMs = 250
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $all = @(Read-JsonLinesFile -Path $Path)
+        $items = $all
+        if ($Skip -gt 0) {
+            if ($all.Count -le $Skip) { Start-Sleep -Milliseconds $IntervalMs; continue }
+            $items = @($all[$Skip..($all.Count - 1)])
+        }
+        foreach ($item in $items) {
+            $okKind = $true
+            if ($Kind) { $okKind = ([string](Get-JsonProp -Object $item -Name 'kind' -Default '') -eq $Kind) }
+            $okName = $true
+            if ($Name) { $okName = ([string](Get-JsonProp -Object $item -Name 'name' -Default '') -eq $Name) }
+            $okPattern = $true
+            # 注意：PSCustomObject 的 [string] 形式不是 JSON（没有引号），-Pattern 必须针对 JSON 文本匹配，
+            # 否则像 '"ok":true' 这样的模式永远匹配不到（会误报「没有任何成功请求」）。
+            if ($Pattern) { $okPattern = ((ConvertTo-JsonText -InputObject $item -Compress) -match $Pattern) }
+            if ($okKind -and $okName -and $okPattern) { return $item }
+        }
+        Start-Sleep -Milliseconds $IntervalMs
+    }
+    return $null
+}
+
+function Get-TextFileTail {
+    <#
+      读取文本文件末尾若干行。**必须显式按 UTF-8 读**：Node/中继/网关的日志都是 UTF-8，
+      而 Windows PowerShell 5.1 的 Get-Content 默认按 ANSI(GBK) 解码 → 中文错误信息会变乱码，
+      排障时等于白看（本轮实测踩过）。
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path, [int]$Lines = 20)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
+    try {
+        $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    } catch { return @() }
+    $all = @($text -split "`r?`n")
+    if ($all.Count -le $Lines) { return $all }
+    return @($all[($all.Count - $Lines)..($all.Count - 1)])
+}
+
+function Start-DetachedCommand {
+    <#
+      分离启动一个命令并返回其真实 PID。
+
+      为什么需要它：从「捕获输出的宿主」（DSH/CI/Agent）里用 Start-Process 启后台服务，
+      子进程会继承宿主的标准句柄与作业对象，宿主会一直等到服务退出才返回。
+      这里用 WMI Win32_Process.Create 创建 scripts/tests/detached-run.mjs，
+      由它用 node 的 detached+unref 拉起真正的工作进程（可选注入环境变量，日志重定向到文件）。
+      detached-run.mjs 把子进程 PID 写入 --pidfile，本函数轮询该文件拿到 PID。
+
+      返回 [pscustomobject]@{ LauncherPid; Pid; LaunchMode; CommandLine; StdOutLog; StdErrLog }。
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$StdOutLog,
+        [string]$StdErrLog,
+        [System.Collections.IDictionary]$Environment = $null,
+        [string]$Node,
+        [int]$WaitSeconds = 20,
+        [switch]$AllowFallback
+    )
+    $runner = Join-Path (Join-Path (Get-ScriptsDir) 'tests') 'detached-run.mjs'
+    if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "找不到分离启动器：$runner" }
+    if (-not $Node) { $Node = Find-NodeExe }
+    if (-not $Node) { throw '找不到 node.exe，无法分离启动命令。' }
+    if (-not $StdErrLog) { $StdErrLog = "$StdOutLog.err" }
+    # WMI 创建进程的工作目录不是调用方目录，相对路径会写歪 → 统一绝对化
+    $StdOutLog = [System.IO.Path]::GetFullPath($StdOutLog)
+    $StdErrLog = [System.IO.Path]::GetFullPath($StdErrLog)
+    if ($WorkingDirectory) { $WorkingDirectory = [System.IO.Path]::GetFullPath($WorkingDirectory) }
+    foreach ($dir in @((Split-Path -Parent $StdOutLog), (Split-Path -Parent $StdErrLog))) {
+        if ($dir -and -not (Test-Path -LiteralPath $dir -PathType Container)) { [void](New-Item -ItemType Directory -Force -Path $dir) }
+    }
+    $pidFile = "$StdOutLog.pid.json"
+    if (Test-Path -LiteralPath $pidFile -PathType Leaf) { Remove-Item -LiteralPath $pidFile -Force }
+
+    $runnerArgs = @($runner, '--pidfile', $pidFile, '--out', $StdOutLog, '--err', $StdErrLog)
+    if ($WorkingDirectory) { $runnerArgs += @('--cwd', $WorkingDirectory) }
+    if ($Environment) {
+        foreach ($key in $Environment.Keys) {
+            $runnerArgs += @('--env', ([string]$key + '=' + [string]$Environment[$key]))
+        }
+    }
+    $runnerArgs += '--'
+    $runnerArgs += @($FilePath)
+    $runnerArgs += @($ArgumentList)
+
+    $cmdLine = (ConvertTo-CommandLineArgument -Value $Node) + ' ' +
+    ((@($runnerArgs) | ForEach-Object { ConvertTo-CommandLineArgument -Value ([string]$_) }) -join ' ')
+
+    $launcherPid = 0
+    $launchMode = ''
+    try {
+        $createResult = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine } -ErrorAction Stop
+        if ($createResult.ReturnValue -eq 0 -and $createResult.ProcessId -gt 0) {
+            $launcherPid = [int]$createResult.ProcessId
+            $launchMode = '分离启动（WMI Win32_Process.Create + detached-run.mjs）'
+        }
+    } catch {
+        Write-Warn "WMI 分离启动不可用（$($_.Exception.Message)）"
+    }
+    if ($launcherPid -le 0 -and $AllowFallback) {
+        $proc = Start-Process -FilePath $Node -ArgumentList $runnerArgs -PassThru -WindowStyle Hidden
+        $launcherPid = $proc.Id
+        $launchMode = 'Start-Process 回退（在捕获输出的宿主里会等到子进程退出才返回）'
+    }
+    if ($launcherPid -le 0) { throw "分离启动失败：无法创建启动器进程（$cmdLine）" }
+
+    $childPid = 0
+    $deadline = (Get-Date).AddSeconds($WaitSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
+            try {
+                $info = Read-JsonFile -Path $pidFile
+                $err = [string](Get-JsonProp -Object $info -Name 'error' -Default '')
+                if ($err) { throw ("分离启动器报错：$err`n  命令：$cmdLine") }
+                $p = [int](Get-JsonProp -Object $info -Name 'pid' -Default 0)
+                if ($p -gt 0) { $childPid = $p; break }
+            } catch {
+                if ($_.Exception.Message -like '分离启动器报错*') { throw }
+            }
+        }
+        Start-Sleep -Milliseconds 150
+    }
+    if ($childPid -le 0) { throw "分离启动超时：$WaitSeconds 秒内未拿到子进程 PID（$cmdLine）" }
+
+    return [pscustomobject]@{
+        LauncherPid = $launcherPid
+        Pid         = $childPid
+        LaunchMode  = $launchMode
+        CommandLine = $cmdLine
+        StdOutLog   = $StdOutLog
+        StdErrLog   = $StdErrLog
+    }
+}
+
+# ── DSH CLI 启动器解析（契约 §8.2：旧版 bin.js 不支持 --json/--session-id）───────
+#
+# 事实（本机实测，2026-10）：
+#   * D:\DSH\resources\runtime\cli\bin\dsh.cmd 内容形如：
+#       set "ELECTRON_RUN_AS_NODE=1"
+#       "%~dp0..\..\..\..\DeepSeek Harness.exe" --expose-internals "%~dp0..\..\..\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" %*
+#   * C:\Users\<用户>\.dsh\profiles\node_modules\@deepseek-ai\dsh\lib\bin.js 是**旧版 CLI**：
+#     `--json` / `--session-id` 都不支持，用它做 v2 续聊必然失败。
+#   所以脚本必须**探测**启动器（允许 -Launcher / DSH_LAUNCHER 覆盖），而不是硬编码盘符。
+
+function Expand-DshCmdPath {
+    <#
+      展开 .cmd 里的 %~dp0（脚本所在目录）并规范化 .. 。返回绝对路径。
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Value, [Parameter(Mandatory = $true)][string]$CmdDir)
+    $text = $Value.Replace('%~dp0', ($CmdDir.TrimEnd('\') + '\')).Replace('%~dpn0', $CmdDir)
+    return [System.IO.Path]::GetFullPath($text)
+}
+
+function Find-DshLauncher {
+    <#
+      探测并解析 DSH CLI 启动器。返回：
+        [pscustomobject]@{ Mode; Launcher; Exe; CliJs; PrefixArgs; Env; Node; LegacyBinPath; Note }
+      Mode:
+        'desktop-host' —— DeepSeek Harness.exe + --expose-internals cli.js + ELECTRON_RUN_AS_NODE=1（推荐，契约 §7.2/§8.2）
+        'legacy-node'  —— node + 旧版 bin.js（仅 v1 兼容；--json/--session-id 不支持）
+        'unknown'      —— 未探测到
+      优先级：-Launcher > $env:DSH_LAUNCHER > <DSH 安装>\resources\runtime\cli\bin\dsh.cmd > PATH 里的 dsh.cmd
+    #>
+    [CmdletBinding()]
+    param([string]$Launcher, [string]$DshRoot, [string]$Node)
+    $cmdCandidates = New-Object System.Collections.ArrayList
+    if ($Launcher) { [void]$cmdCandidates.Add([System.IO.Path]::GetFullPath($Launcher)) }
+    if ($env:DSH_LAUNCHER) { [void]$cmdCandidates.Add([System.IO.Path]::GetFullPath($env:DSH_LAUNCHER)) }
+    $root = $DshRoot
+    if (-not $root) { try { $root = Find-DshRoot } catch { $root = $null } }
+    if ($root) { [void]$cmdCandidates.Add((Join-Path (Join-Path (Join-Path $root 'runtime') 'cli\bin') 'dsh.cmd')) }
+    foreach ($name in @('dsh.cmd', 'dsh.exe')) {
+        $found = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found -and $found.Source) { [void]$cmdCandidates.Add($found.Source) }
+    }
+
+    foreach ($candidate in $cmdCandidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $exe = $null
+        $cliJs = $null
+        try {
+            $text = Read-TextFileUtf8 -Path $candidate
+            $cliMatch = [regex]::Match($text, '--expose-internals\s+"([^"]+)"')
+            $exeMatch = [regex]::Match($text, '"([^"]+\.exe)"')
+            $cmdDir = Split-Path -Parent $candidate
+            if ($exeMatch.Success) { $exe = Expand-DshCmdPath -Value $exeMatch.Groups[1].Value -CmdDir $cmdDir }
+            if ($cliMatch.Success) { $cliJs = Expand-DshCmdPath -Value $cliMatch.Groups[1].Value -CmdDir $cmdDir }
+        } catch { }
+        if ($exe -and $cliJs) {
+            $env2 = @{}
+            if ($text -match 'ELECTRON_RUN_AS_NODE') { $env2['ELECTRON_RUN_AS_NODE'] = '1' }
+            return [pscustomobject]@{
+                Mode         = 'desktop-host'
+                Launcher     = $candidate
+                Exe          = $exe
+                CliJs        = $cliJs
+                PrefixArgs   = @('--expose-internals', $cliJs)
+                Env          = $env2
+                Node         = $null
+                LegacyBinPath = $null
+                Note         = "由 $candidate 解析：可支持 --json/--session-id/--profile sdk（契约 §7.2）"
+            }
+        }
+    }
+
+    # 回退：旧版 node + bin.js（仅 v1 兼容）
+    $legacyBin = $null
+    try { $legacyBin = Find-DshBin } catch { $legacyBin = $null }
+    if ($legacyBin) {
+        $nodeExe = $Node
+        if (-not $nodeExe) { try { $nodeExe = Find-NodeExe } catch { $nodeExe = $null } }
+        return [pscustomobject]@{
+            Mode          = 'legacy-node'
+            Launcher      = $null
+            Exe           = $nodeExe
+            CliJs         = $legacyBin
+            PrefixArgs    = @($legacyBin)
+            Env           = @{}
+            Node          = $nodeExe
+            LegacyBinPath = $legacyBin
+            Note          = "只找到旧版 CLI（$legacyBin）：不支持 --json/--session-id，v2 续聊会失败（契约 §8.2）。请用 -Launcher 指向 dsh.cmd。"
+        }
+    }
+    return [pscustomobject]@{
+        Mode          = 'unknown'
+        Launcher      = $null
+        Exe           = $null
+        CliJs         = $null
+        PrefixArgs    = @()
+        Env           = @{}
+        Node          = $null
+        LegacyBinPath = $null
+        Note          = '未探测到 DSH 启动器（dsh.cmd / dsh.exe）。'
+    }
+}
+
+function Test-LegacyDshBinPath {
+    <#
+      判断一个路径是否是契约 §8.2 里那类「旧版 CLI」（profiles\node_modules\@deepseek-ai\dsh\lib\bin.js）。
+    #>
+    [CmdletBinding()]
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    return ($Path -match '(?i)profiles\\node_modules\\@deepseek-ai\\dsh\\lib\\bin\.js$')
 }
