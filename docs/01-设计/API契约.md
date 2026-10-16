@@ -15,6 +15,9 @@
 | 服务默认端口 | `8787` |
 | 事件流 | `GET /api/v1/events` 使用 **SSE**（`text/event-stream`） |
 
+> **本文件仍冻结在 v1（`X-Api-Version: 1`）**：§5.1 只登记 **v2 会话面**的字段增量与语义变更
+> （v2 的端点在 `/api/v2/*`，其权威定义在 [协议契约 v2](../01-设计/协议契约-v2.md)）。
+
 统一错误体（HTTP 4xx/5xx）：
 
 ```json
@@ -121,7 +124,8 @@ queued ──▶ running ──▶ succeeded
   "title": "跑单测",                     // 可选，缺省取 prompt 前 40 字
   "model": "deepseek-flash",             // 可选，缺省用网关默认
   "reasoningEffort": "max",              // 可选
-  "timeoutSec": 3600                     // 可选，缺省 3600，上限 86400
+  "timeoutSec": 3600,                    // 可选，缺省 3600，上限 86400
+  "access": "workspace"                  // 可选，任务权限档：workspace（默认，仅当前工作区）| full（全部权限）
 }
 ```
 
@@ -133,6 +137,7 @@ queued ──▶ running ──▶ succeeded
   "title": "跑单测",
   "prompt": "……",
   "workspace": "D:\\proj",
+  "access": "workspace",
   "status": "queued",
   "createdAt": 1730000000000,
   "startedAt": null,
@@ -145,7 +150,12 @@ queued ──▶ running ──▶ succeeded
 }
 ```
 
-错误：`bad_request`（`prompt` 为空、`workspace` 不存在）、`busy`（并发已满，`429`）。
+错误：`bad_request`（`prompt` 为空、`workspace` 不存在、**`access` 不是 `workspace`/`full` 之一**）、`busy`（并发已满，`429`）。
+
+> `access` 是任务级权限档（用户需求 m00834）：网关把它翻译成子进程环境变量 `DSH_PERMISSION_MODE`
+> （`workspace` → `workspace-write`，`full` → `danger-full-access`），因为 DSH 侧没有"权限"命令行参数。
+> 缺省 = `workspace`；未知取值一律 `400`，不会被视为高权限。实测证据见
+> `.runtime/acceptance/permission-access-20261013-220041/RESULT.md`。
 
 ### 3.2 任务列表
 
@@ -213,6 +223,35 @@ data: {"seq":42,"taskId":"task_01J…","at":1730000001000,"type":"task.output","
 ```
 
 `DELETE /api/v1/devices/{tokenId}` → `204`（吊销令牌）
+
+### 5.1 v2 会话面与任务面的接口增量（`driver` / `writable` / `host` / `createdBy`；`X-Api-Version` 仍为 `2`）
+
+> 本条只登记**增量与语义变更**，字段全集与线格式以 [协议契约 v2 §4.2](../01-设计/协议契约-v2.md) 为准
+> （v2 会话面在网关 v2 路由下：`/api/v2/sessions*`，不在本文件 §3 的 v1 任务面内）。
+
+| 变更 | 内容 | 兼容性 |
+|---|---|---|
+| **新增响应字段** `driver` | `"desktop"` \| `"gateway"`，标识**谁在驱动该会话**。`source:"computer"`→`desktop`，`source:"phone"`→`gateway` | **纯新增可选响应字段** → `X-Api-Version` **保持 `2`**。**自 v2.4.0 起服务端恒显式下发**（电脑端与手机会话都下发），客户端仍须在字段缺失时按 `source` 推导以兼容老网关，不得因缺失而报错 |
+| **语义变更** `writable` | `source:"computer"`（电脑端会话）**不再恒为 `false`**：新通道可用时为 `true`（轮次由电脑端 runtime 真实执行），不可用时回到 `false`（退回只读镜像） | **非破坏**：字段名与类型不变，只放宽取值。**老网关**行为原样保留（`computer`→`false`），客户端须按"老网关 → 只读"呈现 |
+| `source:"phone"` | **不变**：`writable` 仍取决于该会话是否有活着的运行时（网关重启后转 `false`），`driver` 为 `gateway` | 无 |
+| **`409 session_busy` 适用范围收窄** | 原来对 `source:"computer"` 的**任何** `POST /api/v2/sessions/{id}/turns` 都返回；现在只在该会话**正被占用**时返回（`live:true` / 租赁未释放 / 运行时已结束）。错误码与文案**逐字不变** | 非破坏：错误码与文案不动，只减少触发面 |
+| **新增事件来源** | `GET /api/v2/sessions/stream`（SSE）除手机会话外，也推送**电脑端会话的真实事件**；事件类型名与载荷形状**不变**（`turn.started`/`message.delta`/`tool.call`/`tool.result`/`turn.ended`/`session.updated`），继续带 `sessionId`+`source` | 非破坏：事件类型名不变，只会**多**出 `source:"computer"` 的事件；客户端按 `source` 分流，不认识的取值忽略 |
+| **新增可选请求字段** `host`（v2.5.0） | `POST /api/v2/tasks` 增加 `"desktop"` \| `"gateway"`，决定**新任务建在哪**：`desktop` = 原生建在电脑端 DSH 的工作区里，`gateway` = 网关自有 home（旧行为）。缺省 = 桌面端通道可用时 `"desktop"`，未接入时 `"gateway"` | **纯新增可选请求字段** → `X-Api-Version` **保持 `2`**；不带该字段时行为不变。`host:"desktop"` 且缺 `workspace` → `400`；网关未接桌面端 → `503 desktop_unavailable` |
+| **新增响应字段** `createdBy`（v2.5.0） | `"phone"` \| `"desktop"`，标识**谁发起的**这条会话。与 `source`（数据长在谁家）、`driver`（现在谁在驱动）是**三件事，客户端不得互相反推** | **纯新增可选响应字段** → 保持 `2`；缺失时客户端按 `source=="phone" ? "phone" : "desktop"` 推导 |
+| **新增可选查询参数** `?sessionId=`（v2.5.0） | `GET /api/v2/sessions/stream`（SSE）带该参数时**只推送该会话**的事件；**不传 = 全局流**（一条流覆盖两类会话，客户端按 `sessionId` 分流），行为**逐字不变**；不带 `sessionId` 的全局事件（如 `heartbeat`）两种用法下都下发 | 非破坏：可选参数；手机端 `ConsoleStreams.path()` 只带 `fromSeq`/`tail`，走全局流，**不受影响** |
+| **新增错误码**（v2.5.0） | `desktop_unreachable` / `desktop_unavailable` / `desktop_disabled` → `503`；`desktop_unauthorized` / `desktop_error` → `502`。逐字文案见 [协议契约 v2 §4.2/§7.6](../01-设计/协议契约-v2.md) | 非破坏：仅新增取值；实现必须把业务错误码的 `status` 透传给 HTTP 层，否则会**一律回落 `500`**（D-05） |
+
+- 客户端实现约束（与 §7 一致）：`driver` 只用于呈现；**可写性一律以 `writable` 为准**，
+  不得由 `source`/`driver` 反推。`writable:false` 的电脑端会话仍可浏览列表/对话记录/工作区。
+- 权限档位：电脑端会话的轮次由**电脑端 runtime** 执行，其权限就是电脑端 DSH 的权限
+  （用户已明确批准两端同权，不设降权档）；本文件 §3.2 的 `access` 字段只作用于网关自有的手机任务。
+- **`host:"desktop"` 时 `access` 不生效**（契约 §7.6.4 U15）：电脑端会话的权限来自桌面端 DSH 进程自己的
+  `DSH_PERMISSION_MODE`（全局、非每会话），手机端**无法**为它指定档位。客户端应在该形态下隐藏档位选择器，
+  不得把 `access` 渲染成「已按你选的档位执行」。
+- **电脑端会话触发审批时手机端无法代答**（契约 §7.6.4 U16）：桌面端 Remote 方法表里没有任何批准/拒绝审批的方法，
+  该轮会挂起直到有人在电脑端 UI 操作；客户端须给出提示，不得表现为无限转圈。
+- 通道细节（鉴权、线格式、方法表、已知限制）见 [协议契约 v2 §7.4/§7.5](../01-设计/协议契约-v2.md)；
+  该通道依赖 DSH 未公开线协议，实现集中在单一适配层，失败时回退（回退后电脑端会话退回只读）。
 
 ---
 

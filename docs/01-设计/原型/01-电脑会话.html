@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>01 电脑会话（配对后首页）</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .hero { padding-bottom: calc(2 * var(--u)); }
+  .conn { display:flex; align-items:center; gap:calc(8*var(--u)); padding: calc(9*var(--u)) calc(12*var(--u));
+          border-radius: var(--radius-md); background: rgba(47,208,123,.09); border:1px solid rgba(47,208,123,.28); font-size: calc(12*var(--u)); }
+  .sess .title { font-size: calc(14.5*var(--u)); font-weight: 650; }
+  .gitbadge { display:inline-flex; align-items:center; gap:calc(3*var(--u)); font-family: var(--mono); font-size: calc(10.5*var(--u)); color: var(--on-surface-variant); }
+</style>
+</head>
+<body>
+  <div class="statusbar"><span>9:41</span><span class="right">▮▮▮ ⌁ ▰</span></div>
+
+  <div class="appbar hero">
+    <div class="titles">
+      <h1>DSH 远程</h1>
+      <div class="sub"><span class="dot"></span>WIN-4FSO92IHDIN · 已连接 · 38 ms</div>
+    </div>
+    <div class="actions">
+      <div class="iconbtn">⟳</div>
+      <div class="iconbtn">⌕</div>
+    </div>
+  </div>
+
+  <div class="scroll">
+    <div class="conn">
+      <span class="dot pulse"></span>
+      <span class="grow">桌面端 DSH 在线 · 隧道正常</span>
+      <span class="chip live">可续聊</span>
+    </div>
+
+    <div class="filters">
+      <span class="chip sel">全部 17</span>
+      <span class="chip">进行中 1</span>
+      <span class="chip">手机发起 4</span>
+      <span class="chip">只读 2</span>
+    </div>
+
+    <div class="listcard sess">
+      <div class="item">
+        <div class="row between">
+          <div class="title grow ellipsis">重构 Runner 为八条并发分支</div>
+          <span class="chip live"><span class="dot pulse"></span>运行中</span>
+        </div>
+        <div class="preview ellipsis">最后：已把 desktop-api.mjs 的探测改成 session/list，正在跑单测…</div>
+        <div class="meta">
+          <span class="chip ghost">dsh_android</span>
+          <span>12 轮</span><span class="sep">·</span>
+          <span>08:41</span><span class="sep">·</span>
+          <span class="gitbadge">⎇ main +3 −1</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row between">
+          <div class="title grow ellipsis">网关看门狗与免管理员自启验证</div>
+          <span class="chip ok">可续聊</span>
+        </div>
+        <div class="preview ellipsis">最后：杀进程 ≤20 秒自愈，verify.ps1 PASS=4 / FAIL=0</div>
+        <div class="meta">
+          <span class="chip ghost">dsh_remote</span>
+          <span>7 轮</span><span class="sep">·</span>
+          <span>昨天 22:14</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row between">
+          <div class="title grow ellipsis">DSH Remote v2.5.0 公网联调</div>
+          <span class="chip ok">可续聊</span>
+        </div>
+        <div class="preview ellipsis">最后：wss://&lt;IP&gt;:9443 配对成功，探针 12/12</div>
+        <div class="meta">
+          <span class="chip ghost">dsh_android</span>
+          <span>23 轮</span><span class="sep">·</span>
+          <span>昨天 20:52</span><span class="sep">·</span>
+          <span class="gitbadge">⎇ main +18 −4</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row between">
+          <div class="title grow ellipsis">分析 session.v4 帧边界</div>
+          <span class="chip">只读</span>
+        </div>
+        <div class="preview ellipsis">最后：截断帧不会抛错，必须先做结构判定再解压</div>
+        <div class="meta">
+          <span class="chip ghost">dsh_android</span>
+          <span>5 轮</span><span class="sep">·</span>
+          <span>10-13 17:03</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row between">
+          <div class="title grow ellipsis">手机端对话气泡配色微调</div>
+          <span class="chip">只读</span>
+        </div>
+        <div class="preview ellipsis">最后：气泡改用 #24305E，与强调色同族</div>
+        <div class="meta">
+          <span class="chip ghost">dsh_android</span>
+          <span>3 轮</span><span class="sep">·</span>
+          <span>10-12 11:26</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card tight" style="margin-bottom:calc(6*var(--u))">
+      <div class="row between small muted">
+        <span>已加载 5 / 17 条 · 上拉取更早</span>
+        <span>更新于 08:42</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="fab">＋</div>
+
+  <div class="navbar">
+    <div class="tab on"><div class="ic">▤</div>电脑会话</div>
+    <div class="tab"><div class="ic">◫</div>手机任务</div>
+    <div class="tab"><div class="ic">⌸</div>工作区</div>
+    <div class="tab"><div class="ic">⚙</div>设置</div>
+  </div>
+</body>
+</html>
