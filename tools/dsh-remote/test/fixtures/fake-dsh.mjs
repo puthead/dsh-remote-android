@@ -14,14 +14,23 @@ import { spawn } from 'node:child_process';
 const argv = process.argv.slice(2);
 const prompt = argv[argv.length - 1] ?? '';
 
-// 记录 argv/cwd/DSH_HOME，供测试断言传递保真性
+// 记录 argv/cwd/DSH_HOME/权限档环境变量，供测试断言传递保真性
 // 说明：child 侧 process.argv[1] 即被网关作为 argv[0] 传入的 bin.js，
 // 因此这里额外记录 entry，使「网关实际传了什么 argv」可被完整断言。
+// permissionMode 是任务权限档（`access`）在子进程侧的唯一可观测形态：DSH 没有权限命令行参数，
+// 只能靠 DSH_PERMISSION_MODE 环境变量（见 lib/permission.mjs）。
 const recordFile = process.env.FAKE_DSH_ARGV_FILE;
 if (recordFile) {
   fs.appendFileSync(
     recordFile,
-    `${JSON.stringify({ entry: process.argv[1] ?? null, argv, prompt, cwd: process.cwd(), dshHome: process.env.DSH_HOME ?? null })}\n`,
+    `${JSON.stringify({
+      entry: process.argv[1] ?? null,
+      argv,
+      prompt,
+      cwd: process.cwd(),
+      dshHome: process.env.DSH_HOME ?? null,
+      permissionMode: process.env.DSH_PERMISSION_MODE ?? null,
+    })}\n`,
     'utf8',
   );
 }

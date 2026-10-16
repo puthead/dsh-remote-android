@@ -7,17 +7,20 @@
  * 1. **超出并发时排队而不是拒绝**：工单要求「并发上限可配（默认 2），超出进入 queued 队列」，
  *    而契约 §3.1 又要求并发满时返回 `busy`。二者兼容的折中是：并发满 → 进入队列（status=queued）；
  *    仅当**队列也满**（maxQueue，默认 100）时才返回 429 busy。见 README「与契约的取舍」。
- * 2. **任务对象严格按契约字段返回**：`toPublicTask()` 只输出契约表格里的 12 个字段；
- *    执行细节（runId/timeoutSec/model/stderrTail）放在内部 `meta` 中，落库保留、不出现在响应里，
- *    保证 Android 端解析逻辑不受网关内部演进影响。
+ * 2. **任务对象严格按契约字段返回**：`toPublicTask()` 只输出契约表格里的字段（13 个，
+ *    含 `access`）；执行细节（runId/timeoutSec/model/stderrTail）放在内部 `meta` 中，
+ *    落库保留、不出现在响应里，保证 Android 端解析逻辑不受网关内部演进影响。
  * 3. **output 与 delta 流严格相等**：`task.output` 只在事件真正下发时累加，
  *    因此任何时候 `GET /tasks/{id}` 的 output 都等于客户端按 seq 拼接出的文本。
  * 4. **重启恢复**：网关重启后 queued/running 任务不可能继续（子进程已死），
  *    统一标记为 failed('网关重启，任务执行已中断')，绝不留下永远卡在 running 的僵尸任务。
+ * 5. **权限档按任务注入环境变量**：任务参数 `access`（`workspace`|`full`）翻译成子进程的
+ *    `DSH_PERMISSION_MODE`（见 `lib/permission.mjs`）。缺字段=仅当前工作区，未知取值也收紧到该档。
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { EventBus } from './events.mjs';
+import { ACCESS_FULL, ACCESS_WORKSPACE, describeAccess, permissionModeFor } from './permission.mjs';
 import { atomicWriteJson, newRunId, newTaskId, readJsonFile, sleep, truncateUtf8 } from './util.mjs';
 import {
   OutputAccumulator,
@@ -62,6 +65,7 @@ export function toPublicTask(task) {
     title: task.title,
     prompt: task.prompt,
     workspace: task.workspace,
+    access: task.access ?? ACCESS_WORKSPACE,
     status: task.status,
     createdAt: task.createdAt,
     startedAt: task.startedAt,
@@ -100,7 +104,38 @@ export class TaskManager {
     this.queue = [];
     /** @type {Map<string, object>} 正在运行的任务句柄 */
     this.running = new Map();
+    /**
+     * 已被删除的任务 id（墓碑）。
+     *
+     * 为什么单靠 `this.tasks.has()` 不够：`persist()` 的判定与 `atomicWriteJson` 的
+     * `rename` 之间隔着多个 await（mkdir/open/writeFile/sync），DELETE 可以在这个窗口里
+     * 完成「删内存 + 删文件」，随后在途的 rename 把文件**重新写回**——表现为"删掉的任务
+     * 文件复活"。实测该竞态在并发套件下约 3/5 概率复现（`test/tasks.test.mjs` 的
+     * 「删除任务」用例）。墓碑一旦设置就不清除，且只增不减（任务 id 不复用）。
+     * @type {Set<string>}
+     */
+    this.deletedIds = new Set();
+    /**
+     * 每个任务一条写链：把「落盘」与「删除」串行化到同一队列，保证删除的文件操作
+     * 一定发生在该任务所有在途落盘之后。
+     * @type {Map<string, Promise<unknown>>}
+     */
+    this.writeChains = new Map();
     this.closed = false;
+  }
+
+  /**
+   * 把一次文件操作排到该任务的写链尾部。
+   * @param {string} id
+   * @param {() => Promise<unknown>} op
+   * @returns {Promise<unknown>}
+   */
+  #enqueueIo(id, op) {
+    const prev = this.writeChains.get(id) ?? Promise.resolve();
+    const next = prev.then(op, op);
+    // 链尾只用于排序，失败已在各 op 内部消化；catch 避免 unhandledRejection。
+    this.writeChains.set(id, next.catch(() => {}));
+    return next;
   }
 
   /** 加载历史任务；清理崩溃残留的临时文件；修复中断的活动任务。 */
@@ -133,6 +168,8 @@ export class TaskManager {
         title: typeof value.title === 'string' ? value.title : defaultTitle(value.prompt ?? ''),
         prompt: typeof value.prompt === 'string' ? value.prompt : '',
         workspace: typeof value.workspace === 'string' ? value.workspace : '',
+        // 老任务文件没有该字段 → 按默认档（仅当前工作区）恢复，绝不因为缺字段就放开权限
+        access: value.access === ACCESS_FULL ? ACCESS_FULL : ACCESS_WORKSPACE,
         status: ACTIVE_STATUSES.includes(value.status) || TERMINAL_STATUSES.includes(value.status) ? value.status : 'failed',
         createdAt: Number(value.createdAt) || this.now(),
         startedAt: value.startedAt ?? null,
@@ -165,10 +202,10 @@ export class TaskManager {
 
   /**
    * 提交任务。workspace 的白名单校验由 HTTP 层完成后传入（已归一化的真实路径）。
-   * @param {{prompt: string, workspace: string, title?: string|null, model?: string|null, reasoningEffort?: string|null, timeoutSec?: number|null}} input
+   * @param {{prompt: string, workspace: string, title?: string|null, model?: string|null, reasoningEffort?: string|null, timeoutSec?: number|null, access?: string}} input
    * @returns {Promise<object>} 契约 Task 对象
    */
-  async submit({ prompt, workspace, title = null, model = null, reasoningEffort = null, timeoutSec = null }) {
+  async submit({ prompt, workspace, title = null, model = null, reasoningEffort = null, timeoutSec = null, access = ACCESS_WORKSPACE }) {
     if (this.closed) throw new TaskError('internal', '网关正在关闭，暂不接受新任务');
     if (typeof prompt !== 'string' || prompt.trim().length === 0) {
       throw new TaskError('bad_request', 'prompt 不能为空');
@@ -176,6 +213,9 @@ export class TaskManager {
     if (prompt.length > MAX_PROMPT_CHARS) {
       throw new TaskError('bad_request', `prompt 过长（上限 ${MAX_PROMPT_CHARS} 字符）`);
     }
+    // 防御性归一：HTTP 层已经用 resolveAccess 校验过，这里再收一次口，
+    // 保证任何调用路径（脚本、测试、将来的其它入口）都拿不到第三种取值。
+    const normalizedAccess = access === ACCESS_FULL ? ACCESS_FULL : ACCESS_WORKSPACE;
     // 契约 A2 语义：maxConcurrent 只限制同时 running 的数量，超出进入 queued；
     // 只有「当前没有空闲槽位、且排队数已达 maxQueue」时才算队列满 → 429 busy。
     // 因此能立刻开跑的任务不占用队列额度（maxQueue=0 时第一个任务依然应当被接受）。
@@ -191,6 +231,7 @@ export class TaskManager {
       title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 120) : defaultTitle(prompt),
       prompt,
       workspace,
+      access: normalizedAccess,
       status: 'queued',
       createdAt: at,
       startedAt: null,
@@ -303,7 +344,12 @@ export class TaskManager {
       throw new TaskError('conflict', `仅终态任务可删除（当前状态：${task.status}）`);
     }
     this.tasks.delete(id);
-    await fsp.rm(this.taskFile(id), { force: true }).catch(() => {});
+    // 先立墓碑，再排队删文件：这样任何「已通过 has() 判定、但还没 rename」的在途落盘
+    // 都会在写链内部被墓碑挡下，不会把已删除的任务写回磁盘。
+    this.deletedIds.add(id);
+    await this.#enqueueIo(id, async () => {
+      await fsp.rm(this.taskFile(id), { force: true }).catch(() => {});
+    });
     return true;
   }
 
@@ -344,12 +390,25 @@ export class TaskManager {
   async persist(task) {
     // 已被 DELETE 的任务不再落盘：否则「删除」与运行收尾阶段的在途 persist 竞争，
     // 会把已删除的任务文件重新写回磁盘。
-    if (!this.tasks.has(task.id)) return;
-    try {
-      await atomicWriteJson(this.taskFile(task.id), task);
-    } catch (err) {
-      this.logger.error(`任务落盘失败 id=${task.id}：${err.message}`);
-    }
+    if (this.deletedIds.has(task.id) || !this.tasks.has(task.id)) return;
+    // 入链即快照状态：落盘取的是排队那一刻的语义，不是写到磁盘那一刻的内存状态。
+    // 为什么必须快照：运行期间每 5 秒一次节流落盘（见 #persistThrottled），它与收尾的
+    // 终态落盘共用同一条写链；若排在前面的节流写持有的是「running」中间态，而它实际执行
+    // 时任务已进入终态，就会把已经写好的终态记录覆盖回 running——表现为任务完成后
+    // 仍是"进行中"、sessionId/exitCode 丢失。实测该竞态会让 6 条历史里出现 2 条僵尸 running。
+    const queued = { id: task.id, status: task.status, finishedAt: task.finishedAt ?? null };
+    await this.#enqueueIo(task.id, async () => {
+      // 进入写链后再判一次：排队期间可能已被删除，此时绝不能 rename。
+      if (this.deletedIds.has(task.id) || !this.tasks.has(task.id)) return;
+      const live = this.tasks.get(task.id);
+      // 排队时是中间态、写盘时已成终态 → 这次写已过期，丢弃；终态由收尾那次 persist 负责。
+      if (!isTerminal(queued.status) && live && isTerminal(live.status)) return;
+      try {
+        await atomicWriteJson(this.taskFile(task.id), live ?? task);
+      } catch (err) {
+        this.logger.error(`任务落盘失败 id=${task.id}：${err.message}`);
+      }
+    });
   }
 
   /** 节流落盘：运行中的输出每 5 秒最多写一次，避免高频磁盘写。 */
@@ -407,7 +466,13 @@ export class TaskManager {
     handle.acc = acc;
 
     const argv = buildDshArgv(this.config.dsh, task.prompt);
-    const env = buildChildEnv({ home: this.config.home, extraEnv: this.config.dsh.env ?? {} });
+    // 权限档只能靠环境变量下发（headless/sdk profile 都没有权限 flag）；
+    // 顺序很关键：任务级取值放在静态配置 `dsh.env` **之后**，保证被授权的任务不会被配置里的默认值覆盖。
+    const permissionMode = permissionModeFor(task.access);
+    const env = buildChildEnv({
+      home: this.config.home,
+      extraEnv: { ...(this.config.dsh.env ?? {}), DSH_PERMISSION_MODE: permissionMode },
+    });
     const discover = Boolean(this.config.dsh.discoverSessionId);
     const before = discover ? await listSessions({ home: this.config.home, workspace: task.workspace }) : null;
 
@@ -428,7 +493,7 @@ export class TaskManager {
     proc.start();
     task.meta.pid = proc.pid;
     this.logger.info(
-      `task started id=${id} runId=${task.meta.runId} pid=${proc.pid} timeoutSec=${task.meta.timeoutSec} workspace=${task.workspace}`,
+      `task started id=${id} runId=${task.meta.runId} pid=${proc.pid} timeoutSec=${task.meta.timeoutSec} workspace=${task.workspace} access=${task.access}(${permissionMode}/${describeAccess(task.access)})`,
     );
 
     const timeoutTimer = setTimeout(() => {

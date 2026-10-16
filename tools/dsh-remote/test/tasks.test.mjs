@@ -25,6 +25,7 @@ test('任务成功：201 返回契约字段，终态 succeeded 且 output 非空
   const task = created.body;
   assert.match(task.id, /^task_[0-9A-HJKMNP-TV-Z]{26}$/, 'taskId 必须是合法 ULID 格式');
   assert.deepEqual(Object.keys(task).sort(), [
+    'access',
     'createdAt',
     'error',
     'exitCode',
@@ -39,6 +40,7 @@ test('任务成功：201 返回契约字段，终态 succeeded 且 output 非空
     'truncated',
     'workspace',
   ], '响应字段必须严格等于契约 Task 对象');
+  assert.equal(task.access, 'workspace', '缺省权限档必须是「仅当前工作区」');
   assert.equal(task.workspace, await fs.realpath(h.workspace), 'workspace 归一化为真实路径');
   assert.equal(task.output, '');
   assert.equal(task.error, null);
@@ -207,6 +209,11 @@ test('提交校验：prompt 空、workspace 越界/相对/不存在、timeoutSec
     [{ prompt: 'x', workspace: h.workspace, timeoutSec: 0 }, /timeoutSec/],
     [{ prompt: 'x', workspace: h.workspace, timeoutSec: 999_999 }, /timeoutSec/],
     [{ prompt: 'x'.repeat(200_001), workspace: h.workspace }, /prompt 过长/],
+    // 权限档只认两个契约取值：拼错一律 400，绝不"猜一个档位"（猜错就是提权）
+    [{ prompt: 'x', workspace: h.workspace, access: 'yolo' }, /access 只能是/],
+    [{ prompt: 'x', workspace: h.workspace, access: 'danger' }, /access 只能是/],
+    [{ prompt: 'x', workspace: h.workspace, access: 1 }, /access 必须是字符串/],
+    [{ prompt: 'x', workspace: h.workspace, access: {} }, /access 必须是字符串/],
   ];
   for (const [body, pattern] of cases) {
     const res = await h.request('POST', '/api/v1/tasks', { body });
@@ -285,6 +292,40 @@ test('删除任务：终态 204、活动任务 409 conflict、未知任务 404',
   await h.request('POST', `/api/v1/tasks/${running.body.id}/cancel`);
 });
 
+test('删除竞态回归：在途 persist 绝不把已删除任务写回磁盘（墓碑 + 写链）', async (t) => {
+  const h = await startHarness(t);
+  const created = await submit(h, scripted({ mode: 'echo', text: 'done', chunks: 1 }));
+  await waitForTask(h, created.body.id);
+  const id = created.body.id;
+  const file = path.join(h.config.tasksDir, `${id}.json`);
+
+  // 打竞态窗口：persist 内部要经过 mkdir/open/writeFile/sync/rename 多个 await，
+  // DELETE 可以插在中间，把文件删掉后又让在途 rename 复活它。
+  // 这里不 await persist，紧接着并发删除，逼出"检查通过 → 删除 → rename"的交错。
+  const task = h.gateway?.tasks;
+  assert.ok(task, 'harness 必须暴露 gateway.tasks 以便做确定性竞态回归');
+  const attempts = [];
+  for (let i = 0; i < 6; i++) attempts.push(task.persist(task.tasks.get(id)).catch(() => {}));
+  const deleted = await h.request('DELETE', `/api/v1/tasks/${id}`);
+  assert.equal(deleted.status, 204);
+  await Promise.allSettled(attempts);
+
+  // 删除返回后可能有写链尾巴仍在跑，给它们一点时间再断言（真实的落后窗口）
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const survived = await fs.readFile(file, 'utf8').then(() => true, () => false);
+  assert.equal(survived, false, '已删除任务的文件不得被在途 persist 复活');
+  assert.equal(await fs.readdir(h.config.tasksDir).then((f) => f.includes(`${id}.json`)), false);
+
+  // 反向断言：墓碑不得误伤其他任务（新任务照常落盘）
+  const other = await submit(h, scripted({ mode: 'echo', text: 'ok', chunks: 1 }));
+  await waitForTask(h, other.body.id);
+  assert.equal(
+    await fs.readdir(h.config.tasksDir).then((f) => f.includes(`${other.body.id}.json`)),
+    true,
+    '墓碑不得影响其他任务的落盘',
+  );
+});
+
 test('输出截断：超过 maxOutputBytes 只保留尾部并置 truncated=true（A2-5）', async (t) => {
   const MAX = 2048;
   const TOTAL = 8192;
@@ -325,6 +366,63 @@ test('输出截断：超过 maxOutputBytes 只保留尾部并置 truncated=true�
   const smallDone = await waitForTask(h, small.body.id);
   assert.equal(smallDone.truncated, false);
   assert.equal(smallDone.output, '短输出');
+});
+
+test('权限档：缺省与显式 workspace 都下发 workspace-write，只有 access=full 才提权', async (t) => {
+  const h = await startHarness(t);
+
+  // 缺省（手机旧版本 / 脚本不传字段）必须落在"仅当前工作区"
+  const byDefault = await submit(h, scripted({ mode: 'echo', text: '默认档' }));
+  assert.equal(byDefault.httpStatus, 201);
+  assert.equal(byDefault.body.access, 'workspace', '缺省必须是 workspace');
+  await waitForTask(h, byDefault.body.id);
+
+  const explicit = await submit(h, scripted({ mode: 'echo', text: '显式档' }), { access: 'workspace' });
+  assert.equal(explicit.body.access, 'workspace');
+  await waitForTask(h, explicit.body.id);
+
+  const full = await submit(h, scripted({ mode: 'echo', text: '全权限' }), { access: 'full' });
+  assert.equal(full.httpStatus, 201);
+  assert.equal(full.body.access, 'full', '响应必须回显契约值 full');
+  const done = await waitForTask(h, full.body.id);
+  assert.equal(done.access, 'full', 'GET 任务详情同样带回 access');
+
+  // 关键断言：权限档在子进程侧的唯一可观测形态就是 DSH_PERMISSION_MODE
+  const calls = await h.recorded();
+  assert.equal(calls.length, 3);
+  assert.deepEqual(
+    calls.map((c) => c.permissionMode),
+    ['workspace-write', 'workspace-write', 'danger-full-access'],
+    '前两个任务只能是 workspace-write，只有 access=full 的任务才拿到 danger-full-access',
+  );
+  // argv 里绝不能出现权限参数（DSH 没有这个 flag，出现即说明实现走偏了）
+  for (const call of calls) {
+    assert.ok(!call.argv.some((a) => a.includes('permission') || a.includes('sandbox')), 'argv 不得夹带权限参数');
+  }
+});
+
+test('权限档：DSH 原生取值别名归一，响应只回契约值', async (t) => {
+  const h = await startHarness(t);
+  // 兼容脚本/其它客户端直接写 DSH 的值（不把它们当契约，但接受）
+  const res = await h.request('POST', '/api/v1/tasks', {
+    body: { prompt: scripted({ mode: 'echo', text: '别名' }), workspace: h.workspace, access: 'danger-full-access' },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.json.access, 'full', '别名必须归一成契约值');
+  await waitForTask(h, res.json.id);
+  const calls = await h.recorded();
+  assert.equal(calls[0].permissionMode, 'danger-full-access');
+});
+
+test('权限档：非法取值不启动子进程（400 且无 argv 记录）', async (t) => {
+  const h = await startHarness(t);
+  const res = await h.request('POST', '/api/v1/tasks', {
+    body: { prompt: 'x', workspace: h.workspace, access: 'root' },
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.json.error.code, 'bad_request');
+  assert.match(res.json.error.message, /access 只能是 workspace（仅当前工作区）或 full（全部权限）/);
+  assert.deepEqual(await h.recorded(), [], '被拒的请求绝不能起子进程');
 });
 
 test('discoverSessionId：仅识别本次新增的 session 条目，多候选时不猜', async () => {

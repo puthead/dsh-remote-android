@@ -274,9 +274,14 @@ test('健康检查字段与契约一致', async (t) => {
     'pairingOpen',
     'queuedTasks',
     'serverName',
+    'supportedApiVersions',
     'uptimeMs',
   ]);
+  // v1 的字段集合**逐字不变**（契约 §0：v1 端点全部保留）。
+  // apiVersion 保持 1：它宣告的是 **v1 端点**的版本，已交付的 v1 客户端据此判断兼容性；
+  // v2 能力另用 supportedApiVersions 宣告（lead 裁定，见 lib/config.mjs 的 API_VERSION 注释）。
   assert.equal(body.apiVersion, 1);
+  assert.deepEqual(body.supportedApiVersions, [1, 2]);
   assert.equal(body.authRequired, true);
   assert.deepEqual(body.capabilities, ['tasks', 'events', 'pairing', 'workspaces', 'cancel']);
   assert.equal(typeof body.uptimeMs, 'number');

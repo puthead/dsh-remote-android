@@ -1,15 +1,19 @@
 {
   "_readme": [
-    "dsh-remote 网关配置模板：复制为 config.json 后按需修改。",
-    "本文件绝不写入任何真实密钥：API Key 只放在 dshHome 下的 .credentials.yaml（单行 DEEPSEEK_API_KEY: sk-...）。",
-    "dshHome 同时是凭据目录、任务历史（tasks/）与日志（logs/）的根，并被作为 DSH_HOME 传给 dsh 子进程。",
-    "workspaceAllowlist 为空表示拒绝所有任务（默认拒绝，避免忘记配置导致全盘可写）。"
+    "dsh-remote 网关配置模板（API 契约 v2）：复制为 config.json 后按需修改。",
+    "本文件绝不写入任何真实密钥：API Key 只放在 DSH 凭据文件 .credentials.yaml 的 refs.DEEPSEEK_API_KEY。",
+    "dshHome 是**网关自己**的运行时根：devices.json / tasks/ / logs/ / relay.json / dsh-home/。",
+    "mirror.dshHome 是**用户真实在用的** DSH home（%USERPROFILE%\\.dsh），只读镜像电脑端会话，网关绝不写入。",
+    "dsh.sessionsHome 是网关用 SDK profile 创建手机会话的地方，与镜像源严格分离。",
+    "workspaceAllowlist 为空表示拒绝所有任务（默认拒绝，避免忘记配置导致全盘可写）。",
+    "relay.enabled=true 时 host 必须是回环地址，否则网关启动即报错（契约 v2 §5.5.1）。",
+    "gatewayVersion 一旦写在配置里就会**覆盖代码常量** GATEWAY_VERSION（lib/config.mjs 的 mergeConfig 深合并）：升级网关后请同步本文件与 config.json 的**两处** gatewayVersion，否则 /api/v1/health 会一直报旧版本号（部署手册 §10.1.2）。"
   ],
-  "host": "0.0.0.0",
+  "host": "127.0.0.1",
   "port": 8787,
   "dshHome": "C:\\Users\\<你的用户名>\\.dsh-remote",
   "serverName": null,
-  "gatewayVersion": "1.0.0",
+  "gatewayVersion": "2.9.0",
   "authRequired": true,
   "maxConcurrent": 2,
   "maxQueue": 100,
@@ -22,15 +26,90 @@
   "dsh": {
     "node": "D:\\DSH\\resources\\runtime\\primary-runtime\\dependencies\\node\\bin\\node.exe",
     "binPath": "C:\\Users\\<你的用户名>\\.dsh\\profiles\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
+    "launcher": "D:\\DSH\\resources\\runtime\\cli\\bin\\dsh.cmd",
+    "electronPath": null,
+    "cliPath": null,
+    "exeArgs": null,
+    "autoDetectLauncher": true,
     "profile": "headless",
+    "sessionsHome": null,
+    "provider": "deepseek-official",
+    "model": "deepseek-flash",
+    "reasoningEffort": "max",
+    "maxTokens": null,
+    "runtimeIdleMs": 1800000,
+    "credentialsFile": null,
+    "apiKeyEnv": "DEEPSEEK_API_KEY",
+    "turnTimeoutSec": 1800,
     "version": "0.1.0-rc.7",
     "discoverSessionId": true,
     "launcherArgs": [],
     "env": {}
   },
+  "mirror": {
+    "enabled": true,
+    "dshHome": null,
+    "liveWindowMs": 60000,
+    "onlyAllowlistedWorkspaces": false,
+    "listLimit": 50,
+    "listLimitMax": 200,
+    "includeSubagentsByDefault": false
+  },
+  "desktop": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 19387,
+    "dshHome": null
+  },
+  "desktopWatch": {
+    "_readme": "电脑端会话实时中继（网关 2.2.0 新增，默认开）：轮询电脑端 runtime，把「电脑端自己发起」的轮次实时转成网关总线事件，手机端才不是「答完就冻结」。enabled=false 即关闭；pollMs 最小 20ms、attachTimeoutMs 500..600000、streamTimeoutMs 1000..86400000（超出范围启动即报错）。",
+    "enabled": true,
+    "pollMs": 2000,
+    "attachTimeoutMs": 15000,
+    "streamTimeoutMs": 1800000
+  },
+  "relay": {
+    "enabled": false,
+    "url": "",
+    "homeName": "",
+    "homeToken": null,
+    "relaySecret": "",
+    "relayName": null,
+    "gatewayVersion": "2.9.0",
+    "maxStreams": 64,
+    "requestTimeoutMs": 60000,
+    "maxFrameBytes": 8388608,
+    "reconnect": {
+      "minMs": 1000,
+      "maxMs": 30000,
+      "factor": 2,
+      "jitter": 0.2
+    },
+    "tls": {
+      "rejectUnauthorized": true,
+      "ca": null
+    },
+    "pairWindow": {
+      "attempts": 5
+    },
+    "allowNonLoopback": false
+  },
   "events": {
     "bufferSize": 2000,
     "heartbeatMs": 15000
+  },
+  "sessionStream": {
+    "bufferSize": 4000,
+    "heartbeatMs": 15000,
+    "maxClients": 16
+  },
+  "workspaceFs": {
+    "maxEntries": 2000,
+    "maxDepth": 4,
+    "maxFileBytes": 1048576,
+    "searchBudgetMs": 5000,
+    "searchMaxFiles": 20000,
+    "searchMaxFileBytes": 2097152
   },
   "limits": {
     "maxBodyBytes": 1048576,

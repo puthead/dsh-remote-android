@@ -14,7 +14,8 @@ import { httpRequest, makeSandbox, pairDevice, scripted, startHarness, waitFor, 
 /** 在同一个 sandbox 上启动一个网关实例（模拟一次重启）。 */
 async function boot(config) {
   const logger = createLogger({ dir: config.logsDir, toConsole: false });
-  const gateway = await createGateway(config, { logger });
+  // desktop: null → 显式关闭桌面端接线，避免构造真实 DesktopApi（会连 127.0.0.1:19387）
+  const gateway = await createGateway(config, { logger, desktop: null });
   const port = await gateway.listen();
   return { gateway, logger, port, baseUrl: `http://127.0.0.1:${port}` };
 }
@@ -101,6 +102,42 @@ test('重启恢复：中断的 running/queued 任务被标记为 failed 并说�
   }
   const restored = await httpRequest(baseUrl, 'GET', `/api/v1/tasks/${interrupted.id}`, { token });
   assert.equal(restored.json.output, '半截输出', '已产出的输出必须保留');
+});
+
+test('权限档持久化：重启后 access 保持原值，老任务文件（无该字段）回落为 workspace', async (t) => {
+  const sandbox = await makeSandbox(t, {}, { autoCleanup: false });
+  const base = {
+    title: 'x',
+    prompt: 'x',
+    workspace: sandbox.workspace,
+    status: 'succeeded',
+    createdAt: Date.now() - 120_000,
+    startedAt: Date.now() - 119_000,
+    finishedAt: Date.now() - 118_000,
+    exitCode: 0,
+    output: '',
+    error: null,
+    truncated: false,
+    sessionId: null,
+    meta: { runId: 'run_x', timeoutSec: 600 },
+  };
+  const fullTask = { ...base, id: 'task_01CCCCCCCCCCCCCCCCCCCCCCCC', access: 'full' };
+  // 老版本写下的文件：没有 access 字段
+  const legacyTask = { ...base, id: 'task_01DDDDDDDDDDDDDDDDDDDDDDDD' };
+  await fs.writeFile(path.join(sandbox.config.tasksDir, `${fullTask.id}.json`), JSON.stringify(fullTask), 'utf8');
+  await fs.writeFile(path.join(sandbox.config.tasksDir, `${legacyTask.id}.json`), JSON.stringify(legacyTask), 'utf8');
+
+  const { gateway, baseUrl } = await boot(sandbox.config);
+  t.after(async () => {
+    await gateway.close().catch(() => {});
+    await sandbox.cleanup();
+  });
+  const token = await pairDevice(baseUrl, { deviceName: 'pc', deviceId: '11111111-2222-4333-8444-555555555503' });
+
+  const full = await httpRequest(baseUrl, 'GET', `/api/v1/tasks/${fullTask.id}`, { token });
+  assert.equal(full.json.access, 'full', '全部权限任务重启后不得被静默降档');
+  const legacy = await httpRequest(baseUrl, 'GET', `/api/v1/tasks/${legacyTask.id}`, { token });
+  assert.equal(legacy.json.access, 'workspace', '缺字段的老任务一律按"仅当前工作区"处理');
 });
 
 test('启动清理：原子写残留的 .tmp 文件被删除，损坏的任务文件被隔离而非导致启动失败', async (t) => {

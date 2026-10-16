@@ -12,7 +12,10 @@ test('默认配置符合契约与工单要求', () => {
   const cfg = defaultConfig({});
   assert.equal(cfg.port, 8787, '默认端口必须是 8787');
   assert.equal(cfg.host, '0.0.0.0');
+  // apiVersion 是 **v1 端点**的版本号，不是网关支持的最高版本：
+  // 已交付的 v1 Android 客户端用它做兼容性判断，改成 2 会让老客户端误判不兼容（lead 裁定）。
   assert.equal(cfg.apiVersion, 1);
+  assert.deepEqual(cfg.supportedApiVersions, [1, 2], 'v2 能力通过 supportedApiVersions 宣告');
   assert.equal(cfg.authRequired, true);
   assert.equal(cfg.maxConcurrent, 2, '默认并发上限 2');
   assert.equal(cfg.defaultTimeoutSec, 3600, '默认超时 3600 秒');
@@ -62,6 +65,9 @@ test('validateConfig：非法值必须抛出 ConfigError 且信息可读', () =>
     [{ events: { heartbeatMs: 1 } }, /heartbeatMs/],
     [{ limits: { maxBodyBytes: 10 } }, /maxBodyBytes/],
     [{ dsh: { profile: '' } }, /dsh.profile/],
+    [{ desktopWatch: { pollMs: 10 } }, /desktopWatch\.pollMs/],
+    [{ desktopWatch: { enabled: 'yes' } }, /desktopWatch\.enabled/],
+    [{ desktopWatch: { attachTimeoutMs: 0 } }, /desktopWatch\.attachTimeoutMs/],
   ];
   for (const [patch, pattern] of cases) {
     assert.throws(() => validateConfig(mergeConfig(defaultConfig({}), patch), { env: {} }), ConfigError);
@@ -84,6 +90,20 @@ test('validateConfig：派生 home/tasksDir/logsDir/devicesFile，默认工作�
   assert.equal(cfg.devicesFile, path.join(cfg.home, 'devices.json'));
   assert.equal(cfg.credentialsFile, path.join(cfg.home, '.credentials.yaml'));
   assert.equal(cfg.defaultWorkspace, path.resolve('D:\\a'));
+});
+
+test('默认配置：电脑端会话实时中继默认开启（关掉它手机端就永远看不到电脑端发起的轮次）', () => {
+  const cfg = validateConfig(defaultConfig({}), { env: {} });
+  assert.equal(cfg.desktopWatch.enabled, true);
+  assert.equal(cfg.desktopWatch.pollMs, 2000);
+  assert.equal(cfg.desktopWatch.streamTimeoutMs, 30 * 60_000, '一轮长任务可能跑很久，不能被流超时斩断');
+  assert.equal(cfg.desktopWatch.attachTimeoutMs, 15_000);
+});
+
+test('validateConfig：只给 desktopWatch.enabled 时其余字段由默认值补齐', () => {
+  const cfg = validateConfig(mergeConfig(defaultConfig({}), { desktopWatch: { enabled: false } }), { env: {} });
+  assert.equal(cfg.desktopWatch.enabled, false);
+  assert.equal(cfg.desktopWatch.pollMs, 2000, '深合并应保留未覆盖的兄弟字段');
 });
 
 test('resolveHome：CLI > DSH_REMOTE_HOME > config.dshHome > DSH_HOME > 默认', () => {

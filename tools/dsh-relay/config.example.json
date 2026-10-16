@@ -1,0 +1,37 @@
+{
+  "relayName": "relay.local",
+  "host": "0.0.0.0",
+  "port": 9443,
+  "relaySecret": "",
+  "publicUrl": null,
+  "tls": {
+    "mode": "off",
+    "certFile": null,
+    "keyFile": null,
+    "selfSignedDir": "tls",
+    "commonName": null,
+    "days": 825
+  },
+  "limits": {
+    "maxBodyBytes": 1048576,
+    "maxStreamsPerConnection": 64,
+    "maxChunkBytes": 262144,
+    "maxStreamBufferBytes": 1048576,
+    "backpressureBytes": 4194304,
+    "maxMessageBytes": 8388608,
+    "pairClaimPerMinute": 20,
+    "authFailPerMinute": 30,
+    "helloTimeoutMs": 10000,
+    "forwardTimeoutMs": 15000
+  },
+  "heartbeat": {
+    "intervalMs": 30000,
+    "timeoutMs": 90000
+  },
+  "pairWindowTtlMs": 300000,
+  "log": {
+    "dirName": "logs",
+    "filePrefix": "relay",
+    "toConsole": true
+  }
+}
