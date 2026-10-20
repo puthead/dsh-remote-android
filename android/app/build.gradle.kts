@@ -66,9 +66,17 @@ android {
         //        ③ 新增模型选择：GET /api/v2/models 拉目录（旧网关 404 就整块不画），选中后随
         //           POST /api/v2/tasks 带 provider/model/reasoningEffort；网关回 modelApplied=false
         //           时先提示「你选的模型没有生效：<原因>」并要求确认，绝不把没生效当成跑成功。
+        // 2.11.0：① 手机端工作区列表与电脑端同步 —— 网关直接读桌面端权威的
+        //        `<dshHome>/storages/workspace.json` 并合并进有效白名单（含标题/来源/会话数），
+        //        电脑上新建的工作区手机端马上能看到、能浏览；② 修复电脑端通道的根因：
+        //        桌面端 0.2.0 起用 `--port 0` 随机端口，网关新增端口自动发现（配置的 19387
+        //        只作提示），审批/电脑端会话/权限修改恢复可用；③ 权限档不再只能靠
+        //        「仅在手机上执行」——新建任务两种 host 都能选；对话里新增「改权限」面板，
+        //        通过桌面端 `/permission <preset>` 改电脑端同一会话（只读/仅工作区/全部权限，
+        //        全部权限带二次风险确认），改完电脑端同一会话立即可见。
         //        versionCode 按开发规范 §8.1 每次交付 +1
-        versionCode = 12
-        versionName = "2.10.0"
+        versionCode = 13
+        versionName = "2.11.0"
         // 设置页展示的协议版本（与契约 §1 的 X-Api-Version 一致）
         buildConfigField("int", "API_VERSION", "2")
     }

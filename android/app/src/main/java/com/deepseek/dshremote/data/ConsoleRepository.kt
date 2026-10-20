@@ -16,6 +16,7 @@ import com.deepseek.dshremote.data.api.PendingImage
 import com.deepseek.dshremote.data.api.RelayHealth
 import com.deepseek.dshremote.data.api.RelayHttpClient
 import com.deepseek.dshremote.data.api.SearchHit
+import com.deepseek.dshremote.data.api.SessionPermission
 import com.deepseek.dshremote.data.api.SessionSummary
 import com.deepseek.dshremote.data.api.TaskAccess
 import com.deepseek.dshremote.data.api.TaskHost
@@ -546,6 +547,29 @@ class ConsoleRepository(
         writeLock.withLock { _sessions.value = list }
         cache.saveSessions(list)
         list.firstOrNull { it.id == sessionId }
+    }
+
+    /**
+     * 改电脑端会话权限（契约 §7.9，v2.11.0）。
+     *
+     * 成功时把网关回执的 `permission` **立刻**写回本地会话列表：详情页的权限那行与
+     * 新建任务页都从同一份 `sessions` 读，等待下一次列表刷新会让用户看到"点完没反应"。
+     * 失败原样返回（含旧网关 404 / 电脑端离线），由 ViewModel 翻译成可读文案。
+     *
+     * 走 [tunnelTolerant]：这是用户主动点的一下，撞上重连窗口时值得等一次重试。
+     */
+    suspend fun setSessionPermission(sessionId: String, preset: String): Result<SessionPermission> = tunnelTolerant {
+        val permission = api.setSessionPermission(sessionId, preset)
+        var updated: List<SessionSummary>? = null
+        writeLock.withLock {
+            val next = _sessions.value.map {
+                if (it.id == sessionId) it.copy(permission = permission, updatedAt = now()) else it
+            }
+            _sessions.value = next
+            updated = next
+        }
+        updated?.let { cache.saveSessions(it) }
+        permission
     }
 
     /**
@@ -1180,7 +1204,14 @@ class ConsoleRepository(
                 } else {
                     _sessions.value = _sessions.value.map {
                         if (it.id == event.sessionId) {
-                            it.copy(live = event.live, updatedAt = maxOf(it.updatedAt, event.updatedAt))
+                            it.copy(
+                                // 权限广播只带 `permission`（没有 live/updatedAt）：不能因为缺字段
+                                // 就把一个正在跑的会话在列表里"熄灭"（event.live 缺省 false）。
+                                live = if (event.permission != null && event.updatedAt == 0L) it.live else event.live,
+                                updatedAt = maxOf(it.updatedAt, event.updatedAt),
+                                // 权限事件可能来自另一台手机/网页：直接覆盖，别等下一次列表刷新。
+                                permission = event.permission ?: it.permission,
+                            )
                         } else {
                             it
                         }

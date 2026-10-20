@@ -23,6 +23,11 @@ sealed interface ConsoleEvent {
         val live: Boolean,
         /** `source`（契约裁定：session.updated/turn.started/session.created 会带）；未知值为空串。 */
         val source: String = "",
+        /**
+         * v2.11.0：同一会话的权限被改过时随事件下发（手机/另一台手机都能立刻更新）。
+         * null = 这次 `session.updated` 与权限无关。
+         */
+        val permission: SessionPermission? = null,
     ) : ConsoleEvent {
         override val seq: Long? get() = null
     }
@@ -196,6 +201,7 @@ class SseV2Parser(private val delegate: SseFrameParser = SseFrameParser()) {
                 live = obj.optBoolean("live", false),
                 // 未知 source 原样带上：上层只做展示/分流，绝不因为取值陌生而报错
                 source = obj.optString("source", ""),
+                permission = JsonV2.parseSessionPermission(obj.optJSONObject("permission")),
             )
 
             "session.created" -> ConsoleEvent.SessionCreated(

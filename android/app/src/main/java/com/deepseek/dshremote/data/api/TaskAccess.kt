@@ -45,8 +45,10 @@ enum class TaskAccess(val wire: String, val label: String, val detail: String) {
  * 网关 v2.1.0 起手机新建任务**默认落在电脑端 DSH**（`source:"computer"`，电脑上也能看到、
  * 能接管），只有显式要求时才在网关自己的 DSH_HOME 里用 SDK profile 起一轮。
  *
- * 权限档 [TaskAccess] **只在 [GATEWAY] 下有意义**：落在电脑端时权限跟随电脑端 DSH 自己的设置，
- * 手机端无法指定（服务端也不会回执 `access`）。
+ * 权限档 [TaskAccess] **两种 host 都支持**（v2.11.0 起）：
+ * - 落电脑端：网关会在**首轮投递前**让桌面端执行 `/permission <preset>`，电脑端同一会话
+ *   立刻看到同一个档位；之后也能在对话里继续改；
+ * - 落网关：沿用 `access` → `DSH_PERMISSION_MODE`（进程启动时固定，运行中不可改）。
  */
 object TaskHost {
     /** 电脑端 DSH runtime（默认）。要求 `workspace` 非空——电脑端是按工作区登记会话的。 */
@@ -64,14 +66,16 @@ object TaskHost {
 }
 
 /**
- * 请求体里到底要不要带权限档：**只有落网关（`host:"gateway"`）才带**。
+ * 请求体里带不带权限档：**两种 host 都带**。
  *
- * 落电脑端（含缺省）时权限跟随电脑端 DSH 自己的设置，手机端指定了也不会生效——
- * 带上 `access` 只是自欺欺人，回执里也不会出现它。抽成纯函数是为了让这条
- * "不许骗用户"的规则能在 JVM 单测里钉住。
+ * v2.11.0 之前这里刻意对电脑端返回 null（权限跟随电脑端设置、手机指定不了）。那条限制
+ * 已经被桌面端 `/permission` 命令打破：现在电脑端执行也能在创建时选档。保留这个纯函数
+ * 是为了让"请求体里一定带 access"在 JVM 单测里有一条可断言的路径，而不是散在 Repository 里。
+ *
+ * 老网关不认识电脑端任务的 `access` 时会忽略它——手机端不能在回执里把"没生效"说成生效
+ * （见 [CreateTaskOutcome.permissionApplied]）。
  */
-fun accessForHost(access: TaskAccess, host: String?): TaskAccess? =
-    if (TaskHost.fromWireOrNull(host) == TaskHost.GATEWAY) access else null
+fun accessForHost(access: TaskAccess, host: String?): TaskAccess? = access
 
 /**
  * 构造 `POST /api/v2/tasks` 的请求体。

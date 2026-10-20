@@ -187,21 +187,22 @@ class TaskOriginTest {
     }
 
     @Test
-    fun `落网关才带权限档，落电脑端不带`() {
+    fun `v2_11 起两种 host 都带权限档`() {
         assertEquals(
             TaskAccess.FULL,
             accessForHost(TaskAccess.FULL, TaskHost.GATEWAY),
         )
-        assertNull(
-            "落电脑端时权限跟随电脑端 DSH，带上就是自欺欺人",
+        assertEquals(
+            "电脑端执行也能在创建时选档（v2.11.0）",
+            TaskAccess.FULL,
             accessForHost(TaskAccess.FULL, TaskHost.DESKTOP),
         )
-        assertNull("host 缺省 = 交给网关定，缺省按落电脑端处理", accessForHost(TaskAccess.FULL, null))
-        assertNull(accessForHost(TaskAccess.FULL, "native"))
+        assertEquals(TaskAccess.FULL, accessForHost(TaskAccess.FULL, null))
+        assertEquals(TaskAccess.FULL, accessForHost(TaskAccess.FULL, "native"))
     }
 
     @Test
-    fun `host 选择决定请求体里的 host 与 access`() {
+    fun `host 选择决定请求体里的 host 与 access（电脑端也带）`() {
         val desktop = JSONObject(
             buildCreateTaskPayload(
                 workspace = "D:\\Workspace\\dsh_android",
@@ -211,7 +212,7 @@ class TaskOriginTest {
             ),
         )
         assertEquals("desktop", desktop.getString("host"))
-        assertFalse("落电脑端不带权限档：$desktop", desktop.has("access"))
+        assertEquals("full", desktop.getString("access"))
 
         val gateway = JSONObject(
             buildCreateTaskPayload(
@@ -258,7 +259,7 @@ class TaskOriginTest {
     // ---------- 回执文案：先说清在哪跑，再谈权限 ----------
 
     @Test
-    fun `落电脑端时不许谈权限档`() {
+    fun `落电脑端但没回执权限档时如实说跟随电脑端`() {
         val note = CreateTaskOutcome(
             sessionId = "session-x",
             turnId = "turn-1",
@@ -267,10 +268,38 @@ class TaskOriginTest {
             host = TaskHost.DESKTOP,
         ).placementNote()
         assertTrue(note, note.contains("电脑端"))
-        assertTrue("要说清权限归谁管：$note", note.contains("跟随电脑端"))
+        assertTrue("没说权限时只能承诺跟随电脑端：$note", note.contains("跟随电脑端"))
         assertFalse("手机没指定权限档，不许说成已按某档执行：$note", note.contains("已按"))
         assertFalse(note, note.contains("全部权限"))
         assertFalse(note, note.contains("仅当前工作区"))
+    }
+
+    @Test
+    fun `落电脑端且权限已生效时按回执说清档位`() {
+        val full = CreateTaskOutcome(
+            sessionId = "session-x",
+            turnId = "turn-1",
+            accepted = true,
+            source = SessionSummary.SOURCE_COMPUTER,
+            host = TaskHost.DESKTOP,
+            access = "full",
+            permissionApplied = true,
+        ).placementNote()
+        assertTrue(full, full.contains("电脑端"))
+        assertTrue("要在回执里说清权限：$full", full.contains("全部权限"))
+
+        val notApplied = CreateTaskOutcome(
+            sessionId = "session-x",
+            turnId = "turn-1",
+            accepted = true,
+            source = SessionSummary.SOURCE_COMPUTER,
+            host = TaskHost.DESKTOP,
+            access = null,
+            permissionApplied = false,
+            permissionWarning = "桌面端拒绝执行",
+        ).placementNote()
+        assertTrue("权限没切上必须说没切上：$notApplied", notApplied.contains("权限没切上"))
+        assertFalse(notApplied, notApplied.contains("已按"))
     }
 
     @Test
@@ -323,7 +352,7 @@ class TaskOriginTest {
                 provider = "deepseek-official",
                 reasoningEffort = "high",
                 host = TaskHost.DESKTOP,
-                // 与 ConsoleRepository.createPhoneTask 同形：落电脑端时 accessForHost 给的就是 null
+                // v2.11.0：电脑端执行也带权限档（网关在首轮投递前落到桌面端会话）
                 access = accessForHost(TaskAccess.FULL, TaskHost.DESKTOP),
             ),
         )
@@ -331,7 +360,7 @@ class TaskOriginTest {
         assertEquals("deepseek-official", picked.getString("provider"))
         assertEquals("high", picked.getString("reasoningEffort"))
         assertEquals("desktop", picked.getString("host"))
-        assertFalse("落电脑端的任务不许带权限档：$picked", picked.has("access"))
+        assertEquals("full", picked.getString("access"))
     }
 
     @Test

@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.deepseek.dshremote.data.api.SessionPermission
 import com.deepseek.dshremote.data.api.TrajectoryKind
 import com.deepseek.dshremote.data.api.TrajectoryRow
 import com.deepseek.dshremote.data.api.TurnIndexEntry
@@ -1521,4 +1522,136 @@ private fun turnNavStats(entry: TurnIndexEntry): String {
     if (entry.toolCalls > 0) parts += "${entry.toolCalls} 次工具"
     if (entry.messageCount > 0) parts += "${entry.messageCount} 条"
     return parts.joinToString(" · ")
+}
+
+/**
+ * 会话权限面板（v2.11.0）：在对话里随时切电脑端会话的权限档。
+ *
+ * 交互与桌面端 `PermissionSelect` 对齐：
+ * - 当前档位打勾，点别的档立即提交（不弹确认，危险档由调用方在提交前二次确认）；
+ * - 提交中禁用全部选项，避免连点发出两个 `/permission`；
+ * - 失败原因留在面板里（不关面板），用户能原地重试；
+ * - `custom`（桌面端自定义表项）只展示、不可选 —— 与桌面端"可显示不可选"同一条规则。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PermissionSheet(
+    permission: SessionPermission,
+    saving: Boolean,
+    error: String?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val type = LocalDshType.current
+    val dimens = LocalDshDimens.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = { if (!saving) onDismiss() },
+        sheetState = sheetState,
+        containerColor = DshSurface,
+        dragHandle = {
+            Box(
+                Modifier
+                    .padding(top = 10.dp, bottom = 6.dp)
+                    .size(width = 36.dp, height = 4.dp)
+                    .clip(CircleShape)
+                    .background(DshOutline),
+            )
+        },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "会话权限",
+                style = type.detailTitle,
+                color = DshOnBackground,
+            )
+            Text(
+                text = "改完立即生效，电脑端同一会话也会同步。权限由电脑端 DSH 记录在会话里。",
+                style = type.meta,
+                color = DshOnSurfaceVariant,
+            )
+            Spacer(Modifier.height(2.dp))
+            permission.options.forEach { option ->
+                val current = option.value == permission.currentValue
+                val selectable = permission.canSelect(option) && !saving
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(DshRadius.Sub))
+                        .background(if (current) DshPrimary.copy(alpha = 0.10f) else DshSurfaceVariant)
+                        .border(
+                            dimens.border,
+                            if (current) DshPrimary.copy(alpha = 0.55f) else DshOutline,
+                            RoundedCornerShape(DshRadius.Sub),
+                        )
+                        .clickable(enabled = selectable, role = Role.Button) { onSelect(option.value) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = permission.displayName(option.value),
+                                style = type.body,
+                                color = if (selectable || current) DshOnBackground else DshNeutral,
+                                fontWeight = if (current) FontWeight.Bold else null,
+                            )
+                            if (option.value == SessionPermission.PRESET_FULL) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "危险",
+                                    style = type.tiny,
+                                    color = DshWarning,
+                                )
+                            }
+                            if (!option.selectable) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(text = "仅展示", style = type.tiny, color = DshNeutral)
+                            }
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = permission.descriptionOf(option.value),
+                            style = type.meta,
+                            color = DshOnSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (current) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "当前权限",
+                            tint = DshPrimary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+            if (saving) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = DshPrimary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(text = "正在提交…", style = type.meta, color = DshOnSurfaceVariant)
+                }
+            }
+            if (error != null) {
+                Text(text = error, style = type.meta, color = DshError)
+            }
+            Text(
+                text = "子代理会话不单独改权限；请在上层会话里继续。",
+                style = type.tiny,
+                color = DshNeutral,
+            )
+        }
+    }
 }

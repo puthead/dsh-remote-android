@@ -6,6 +6,7 @@ import com.deepseek.dshremote.data.relay.RelayException
 import com.deepseek.dshremote.data.relay.TunnelEvent
 import com.deepseek.dshremote.data.relay.TunnelHttp
 import java.net.URLEncoder
+import org.json.JSONObject
 import java.util.Base64
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
@@ -384,6 +385,27 @@ class DshApiV2(
      */
     suspend fun turnIndex(sessionId: String): TurnIndex =
         JsonV2.parseTurnIndex(get("/api/v2/sessions/${encodePath(sessionId)}/turn-index"))
+
+    /**
+     * 改电脑端会话权限（契约 §7.9，v2.11.0）。
+     *
+     * 请求 `{"preset":"read-only"|"workspace-write"|"danger-full-access"}`；
+     * 成功响应带最新 `permission` 视图，调用方直接用它覆盖本地状态即可，不必再拉列表。
+     *
+     * 老网关没有这个端点 → 404（`ApiException`），由 ViewModel 翻译成"该网关不支持"。
+     */
+    suspend fun setSessionPermission(sessionId: String, preset: String): SessionPermission {
+        val body = JSONObject().put("preset", preset).toString()
+        val obj = runCatching {
+            JSONObject(post("/api/v2/sessions/${encodePath(sessionId)}/permission", body))
+        }.getOrElse { JSONObject() }
+        return JsonV2.parseSessionPermission(obj.optJSONObject("permission"))
+            ?: SessionPermission(
+                currentValue = obj.optString("preset", preset),
+                editable = true,
+                source = SessionPermission.SOURCE_DESKTOP,
+            )
+    }
 
     // ---------- 内部 ----------
 

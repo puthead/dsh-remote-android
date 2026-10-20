@@ -8,7 +8,7 @@
 |---|---|
 | 组成 | 中继 `tools/dsh-relay`（零依赖，默认 `0.0.0.0:9443`）+ PC 网关 `tools/dsh-remote`（零依赖，**只绑 `127.0.0.1:8787`**）+ 原生 Android App（`android`，Kotlin + Compose）+ Windows 运维脚本（`scripts`） |
 | 接口基线 | [协议契约 v2](docs/01-设计/协议契约-v2.md)（`X-Api-Version: 2`）；[API 契约 v1（冻结）](docs/01-设计/API契约.md) 的端点**全部保留**，网关 `supportedApiVersions:[1,2]` |
-| 默认端口 | 中继 `9443`；网关 `8787`（**只监听回环**，绝不对外）；桌面端 runtime `127.0.0.1:19387`（**不对外开放**，但 v2.4.0 起网关经**回环** Remote RPC 通道让它执行电脑端会话，见[契约 §7.4](docs/01-设计/协议契约-v2.md)） |
+| 默认端口 | 中继 `9443`；网关 `8787`（**只监听回环**，绝不对外）；桌面端 runtime **0.2.0 起由系统分配随机回环端口**（旧版为 `19387`；v2.11.0 起网关自动发现并用 `~/.dsh` 的 browser-session 凭据探测，见[契约 §7.4](docs/01-设计/协议契约-v2.md)），**不对外开放** |
 | 执行引擎 | 网关自有会话：`DSH_HOME` 下的 `dsh --profile sdk`（长驻 JSON-RPC 子进程，支持同会话续聊）；**电脑端会话：桌面端 runtime 通道（`127.0.0.1` 回环，提交 `session/prompt` 由电脑端真实执行）**；**手机新建的任务自 v2.5.0 起默认也落电脑端**（`POST /api/v2/tasks` 的可选字段 `host`，传 `"gateway"` 可显式落回网关自有 home）；镜像只读 `%USERPROFILE%\.dsh` |
 | 实测环境 | Windows 11 + DSH 桌面端 `0.2.0-rc.2` + Android 8.0+（各组件当前版本见[协议契约 v2](docs/01-设计/协议契约-v2.md) 与 `tools/*/lib/config.mjs`，本文不再转抄） |
 | 运行目录 | 网关 `%USERPROFILE%\.dsh-remote`；中继默认 `.runtime\relay-home`（均可用 `-Home` 覆盖） |
@@ -69,12 +69,34 @@ flowchart LR
   所以"当前"标的是最大轮号而不是轮数。
 - **新建任务即对话（v2.10.0）**：点「新建任务」不再弹对话框，而是进一整屏**草稿对话**——工作区、
   「在哪执行 · 权限」、模型三段都在这一屏里选，底下就是和对话页同一个输入胶囊（`ComposerCapsule`）；
-  第一句话按发送才建任务，建好**直接进那个会话**。两处刻意的不装样子：① 权限档只在「仅在手机上执行」
-  时可选——电脑端会话的权限由电脑端自己的会话设置决定（DSH 的 `session/control` 是流不是 setter，
-  外面改不了），所以电脑端模式只画一行如实说明，而不是摆一排按不动的开关；② 模型来自
+  第一句话按发送才建任务，建好**直接进那个会话**。两处刻意的不装样子：① 权限档当初只在「仅在手机上执行」
+  时可选（**v2.11.0 已改**：电脑端执行也能在创建时选，见下一条）；② 模型来自
   `GET /api/v2/models`（桌面端模型目录直通；拿不到就降级成 `source:"config"` + 一条 `failures`
   说明原因，**绝不 5xx**，手机端也就整块不画选择器）。选了模型就经 `session/selectModel` 在**首轮投递前**
   落到电脑端那一轮，没生效不判任务失败，而是横幅告知原因并让你决定是否仍然进入。
+- **v2.11.0：工作区同步 + 对话内改权限（用户报的两件事）**：
+  **① 电脑端新建的工作区手机看不到** —— 有两个根因，都修了：
+  **(a)** 网关的 `GET /api/v2/workspaces` 过去只回 `config.workspaceAllowlist`，电脑端实际登记在
+  `<desktopHome>/storages/workspace.json`。现在网关定时（`desktopWorkspaces.pollMs`，默认 5s）读这份
+  **权威持久化**，把电脑端工作区合并进有效白名单并随列表下发 `title`/`source:"desktop"`/`sessionCount`；
+  电脑上删除后手机端下一次列表/文件请求立即失去访问权。不扫描磁盘、不依赖桌面端 RPC，桌面端离线也能同步。
+  **(b)** 真正的"连不上"根因：桌面端 0.2.0 起用 `--port 0` **随机端口**，而网关写死 19387，
+  于是审批桥、电脑端会话、工作区标题全部静默。现在 `lib/desktop-discovery.mjs` + `DesktopApi.ensurePort()`
+  会从「命令行含 `dsh-desktop-host/lib/index.js` 的进程」的监听表里发现候选端口，再用 `~/.dsh` 的
+  browser-session 自签 cookie 逐端口探测；配置的 `desktop.port` 只作第一顺位提示，`autoDiscover` 默认开。
+  **② 想要「全部权限」只能开「仅在手机上执行」** —— 现在两条路都通：
+  - **新建任务**：两种 host 都能选「全部权限」；电脑端执行时网关在**首轮投递前**让桌面端执行
+    `/permission danger-full-access`（顺序有单测钉住），失败是软失败（`permissionApplied:false` +
+    `permissionWarning`，任务照跑但横幅要求确认，绝不把没生效说成生效）；
+  - **对话里**：输入区上方那行权限说明变成「改权限」入口（也可从「…」菜单进），底部面板列
+    `只读 / 仅工作区 / 全部权限`，改完经 `POST /api/v2/sessions/{id}/permission` → 桌面端
+    `/permission <preset>` → 回读 `permissions` 投影确认；**全部权限带二次风险确认**（与桌面端同款）。
+    权限是会话级事实（写进该会话日志），电脑端同一会话立即看到；网关自有 SDK 会话明确显示"创建时固定、
+    不可运行中改"（没有 setter，不画假开关）。契约 §7.9，能力位 `session.permission` / `workspaces.desktopSync`。
+  **证据**：网关 node 套件 **321 / 321 通过**（新增权限 6 例、工作区同步 3 例、端口发现 5 例）；
+  Android JVM 单测 **694 / 0 失败 / 1 跳过**；临时真实 DSH Web runtime 端到端验证
+  `danger-full-access → read-only → danger-full-access` 返回 `verified:true`；真实桌面端（随机端口 55941）
+  只读探针确认 5 个电脑端工作区（含 `D:\Workspace\养一只哦鲸鲸`）与各会话当前权限档都正确下发。
 - **Markdown 渲染（v2.2.0）**：助手回复按 Markdown 渲染（标题 / 列表与任务项 / 表格 / 引用 / 代码块可复制 / 链接可点），
   工作区里的 `.md` 文件**默认预览、一键切回源码**；解析器是**自研纯 Kotlin**（零第三方依赖），无语法文本逐字符不变。
 - **对话 / 轨迹分页（v2.3.0）**：长会话不再一次性塞进单页 —— 首屏只取**最新一页 60 条**，上拉到顶自动取**更早一页**
@@ -456,6 +478,7 @@ dsh_android/
 | 验证 | 命令 | 结果 |
 |---|---|---|
 | **多合一桌面控制台（2026-10-16，纯运维脚本，手机端/APK 零改动）** | `scripts/dsh-remote-desktop.ps1` 各开关（`-Status` / `-Start` / `-Stop` / `-Pair -NoPause`）+ 桌面 `.cmd` 引导层喂菜单（`0` 退出；`5`+`0` 跑配对）；生产 home `%USERPROFILE%\.dsh-remote`、端口 8787、中继 `wss://…:9443` | **通过**：菜单 8 项渲染完整，状态区读数为 `[网关] 运行中 WIN-4FSO92IHDIN / dsh 0.1.0-rc.7`、`[中继] 已连接`、`[看门狗] 运行中 PID 3468`；`-Status` 三项 `[PASS]` 且未改任何状态；`-Start` 幂等 4 秒返回、退出码 0（修 D-23 前会误报「网关启动失败」）；`-Stop` 8 秒返回，网关与看门狗 PID 双双消失（逐个 `Get-Process` 复核）；冷启动得到新网关 PID `30768` + 新看门狗 `33228`，`/api/v1/health` 回 `{"ok":true,…,"gatewayVersion":"2.9.0"}`、中继已连接。修 D-26 后 `-Pair -NoPause` 输出 **7416 字符**、内联出现 `2) 配对码填：947418（剩余约 299 秒）` 与完整二维码 ASCII art，调用期间系统 `ConsoleWindowClass` 窗口**零新增**（旧写法会多一个随即消失的窗口）。逐条读数见[变更记录 §21](docs/06-项目管理/变更记录.md) |
+| **工作区同步 + 对话内改权限（v2.11.0 / 网关 `2.11.0`）** | 网关 node `node --test test/*.test.mjs`（321 例）；Android `:app:testDebugUnitTest`（694 例 / 1 跳过）+ `:app:assembleRelease`；真实桌面端只读探针 `.runtime/probe-real-desktop.mjs`（配置端口故意写 19387）；临时真实 DSH Web runtime 端到端 `.runtime/probe-permission-e2e.mjs` | **通过**：① 端口发现 —— 真桌面端实际监听 `55941`，网关自动发现后 `GET /api/v2/sessions` 的 `permission` 与 `GET /api/v2/workspaces` 均成功；② 工作区 —— 返回电脑端全部 **5** 个（含 `D:\Workspace\养一只哦鲸鲸`），每条 `source:"desktop"` + `title`；③ 权限 —— 真实 runtime 上 `danger-full-access → read-only → danger-full-access`，两次都 `verified:true`，`GET /sessions/{id}` 回读一致；④ 新建任务顺序由单测钉住「executeCommand 早于 prompt」。APK `deliverables/DSH-Remote-v2.11.0-release.apk`（12,286,960 B，sha256 `20C8275FD1B409C01117F1BC8E96899D2169A89F275E5031774ADC517C2182AD`，versionCode 13 / versionName 2.11.0） |
 | **新建任务即对话 + 模型可选（v2.10.0 / 网关 `2.10.0`）** | 真环境探针 `.probe/models-e2e-probe.ps1`（隔离夹具：中继 9700 / 网关 18087 → 真桌面端 runtime 19387）+ 只读目录探针 `.probe/models-catalog-probe.mjs`；模拟器 UI 回归 `powershell -File android\evidence\v2\run-ui-check.ps1 -Serial emulator-5554`；APK dex 字符串扫描 | **三条都成立**：① 目录 —— `GET /api/v2/models` 回 `source=desktop`、`default=deepseek-official/deepseek-flash`、2 组 4 模型（每个模型带 `reasoning.efforts`）、`failures=0`；真桌面端 `session/modelCatalog` 28 ms 返回、形状 7/7 断言通过（不建会话）。② 生效 —— `POST /api/v2/tasks {model, provider, host:"desktop"}` → 202 且 **`modelApplied=true`**，随后 `GET /api/v2/sessions/<id>` 的 `model` 就是手机上选的那对 provider/model（`live=true`）⇒ 不是"记了个字段"，是真作用到电脑端那一轮。③ 界面 —— 模拟器 UI 回归 **80 / 80 全绿**（第 6b 段重写为「点新建进创建屏 → 判「还没有消息」/「工作区」/「在哪执行 · 权限」→ 填示例落在这屏自己的输入框 → 返回」，截图 `android/evidence/v2/shots/16-create-phone-task.png`；夹具网关不认识新端点，所以那张图恰好把降级文案「网关没报模型清单（旧版本网关）」也钉住了）；`创建并开始` / `新建任务对话框` 在 release 与 debug 两个 dex 里都已查不到（旧弹窗是从产物里消失，不是没人调用）。读数：Android JVM 单测 **687 / 0 失败 / 1 跳过（58 个测试类）**，`BUILD SUCCESSFUL in 1m 31s`；网关套件 `node --test "test/*.test.mjs"` **307 / 307 全绿**（`exit 0`，≈240 s，跑前 = 跑后；基线 296，本轮 +11 条，含「`selectModel` 必须早于 `prompt`」的顺序断言）；APK `deliverables/DSH-Remote-v2.10.0-release.apk`（12,270,576 B，sha256 `A4739B84A886A3E7FBC4469C9B3C38CCAF41C8C869946D6B390758735506E15C`，versionCode 12 / versionName 2.10.0）。**未取证**：实体手机、模型选择器展开后的同屏截图、会话中途换模型（DSH 无支持路径）——见[变更记录 §20.5](docs/06-项目管理/变更记录.md) |
 | **五项真机诉求修复（v2.7.0 / 网关 `2.1.0`）** | 真机链路：`emulator-5554` → `wss://123.207.183.237:9443` → **真实网关 8787** → 桌面端 DSH `127.0.0.1:19387`；截图 `android/evidence/v2.7.0/shots/`（16 张）；读数 `GET /api/v2/health`、`/api/v2/approvals`、`/api/v2/sessions?include=all`；工作区另用 `curl.exe` 直连网关逐条取证 | **五条都成立**：① 工具卡折叠态只剩 1 行、连续成功调用合成 1 行汇总（`ToolGroupingTest` 24 例 + `groupToolCalls`/`toolRunSummary` 纯函数单测）；② `D:\Workspace\插件` 正常列出、**"加载改动失败：路径越界"横幅消失**，进子目录 / **junction `node_modules` 由 `0B` 变「目录 · 08-17 14:14」并点进去列出 400 项** / 面包屑根 chip 都能用（`03/04/07/08/09` 截图），另钉死三态：带 `?workspace=` → 200、**不带 → 403「路径越界（不在工作区内）：D:\Workspace\插件」**（在**未重启**的 18087 上复现，证明**客户端半边单独生效**）、`workspace` 与 `path` 不一致 → 仍 403；③ 崩溃兜底已装（`DshRemoteApp.onCreate` 里排在 `Graph.init` 之前）且设置页可见；④ 真机发起提问 → 手机端 10 秒内出现「模型提问 / 等待你响应」+ `yes`/`no` 选项 → 点 `yes` + 「提交回答」→ 电脑端回复「你选择的是 yes（继续发布）。未修改任何文件。」，**网关计数 `{"asked":1,"answered":1,"failed":0}`**（`10/11` 截图）；⑤ `GET /api/v2/sessions?limit=200` → **36 条**（`origin=subagent` 0、`parentSession` 非空 0、`delegationDepth>0` 0），`?include=all` → **145 条**（含 109 条 `origin=subagent`）⇒ **109 条派生物默认不进手机列表**（`01` 截图）。读数：Android JVM 单测 **489 / 0 失败 / 1 跳过（44 个测试类）**；网关套件全绿（本轮新增 `test/workspace-context.test.mjs` 3 例——**反向验证过**：临时关掉反推逻辑即 2/3 失败并复现同一句越界文案）；APK `deliverables/DSH-Remote-v2.7.0-release.apk`（12,122,409 B，sha256 `D697C2F4F265A79A72A97CC431F5168EAD9F0F63E9A8BC243E564B6BCAB827AE`，versionCode 8 / versionName 2.7.0）与 `DSH-Remote-v2.7.0-debug.apk`（18,498,373 B，sha256 `994DB8C0…369B7`，14 dex），**与旧版同证书可直接覆盖安装**；未取证项（用户那次闪退的原始堆栈、实体手机、fork 文案）见[验收报告 §15.5](docs/04-验收/验收报告.md) |
 | 一键自检 | `pwsh -File scripts/selftest.ps1` | **PASS=9 FAIL=0**：node/dsh 路径、凭据无 BOM、网关 health、配对链路、中文 prompt 往返（POST 响应 + 持久化两次逐字符相等）、端到端真实任务（`succeeded`/`exitCode=0`/文件内容 `OK-中文` 落盘），任务耗时约 3 秒 |

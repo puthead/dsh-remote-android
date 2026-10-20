@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -72,14 +73,15 @@ import com.deepseek.dshremote.data.api.ChatMessage
 import com.deepseek.dshremote.data.api.Deliverable
 import com.deepseek.dshremote.data.api.ImageLoader
 import com.deepseek.dshremote.data.api.ImageRef
+import com.deepseek.dshremote.data.api.SessionPermission
 import com.deepseek.dshremote.data.api.SessionViewMode
-import com.deepseek.dshremote.data.api.TaskAccess
 import com.deepseek.dshremote.data.api.TrajectoryKind
 import com.deepseek.dshremote.data.api.TrajectoryRow
 import com.deepseek.dshremote.data.api.WireApprovals
 import com.deepseek.dshremote.ui.components.AssistantMessage
 import com.deepseek.dshremote.ui.components.ComposerImageRow
 import com.deepseek.dshremote.ui.components.DshCard
+import com.deepseek.dshremote.ui.components.DshChip
 import com.deepseek.dshremote.ui.components.DshIconButton
 import com.deepseek.dshremote.ui.components.EmptyHint
 import com.deepseek.dshremote.ui.components.ErrorText
@@ -159,6 +161,9 @@ fun SessionDetailScreen(
     var moreMenu by remember { mutableStateOf(false) }
     var filterMenu by remember { mutableStateOf(false) }
     var kindFilter by rememberSaveable { mutableStateOf(TrajectoryFilter.All) }
+    // 全部权限不弹"确定吗"就生效，风险太高：与桌面端同一套「显式勾选风险确认」。
+    var fullAccessConfirm by remember { mutableStateOf(false) }
+    var fullAccessAcknowledged by remember { mutableStateOf(false) }
 
     // 全屏看图：列表与面板都只是"点开某一组图的第几张"，
     // 真正的查看器只有这一个实例（多开会让返回键的语义变得说不清）。
@@ -407,6 +412,15 @@ fun SessionDetailScreen(
                                     viewModel.scrollToNewest()
                                 },
                             )
+                            if (ui.canEditPermission) {
+                                DropdownMenuItem(
+                                    text = { MenuLabel("权限…（当前：${ui.permission?.currentLabel.orEmpty()}）") },
+                                    onClick = {
+                                        moreMenu = false
+                                        viewModel.openPermissionSheet()
+                                    },
+                                )
+                            }
                             if (ui.todos.isNotEmpty()) {
                                 DropdownMenuItem(
                                     text = { MenuLabel(if (showTodos) "隐藏待办" else "显示待办") },
@@ -695,6 +709,7 @@ fun SessionDetailScreen(
                     pendingApproval = pendingApproval,
                     onInputChange = viewModel::onInputChange,
                     onSend = viewModel::send,
+                    onPermissionClick = viewModel::openPermissionSheet,
                     onNotice = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
                     onPickGallery = { imagePicker.pickFromGallery() },
                     onTakePhoto = { imagePicker.takePhoto() },
@@ -753,6 +768,58 @@ fun SessionDetailScreen(
         )
     }
 
+    // 对话内改权限（v2.11.0）：入口在输入区上方那行说明与「…」菜单里。
+    if (ui.permissionSheetOpen && ui.permission != null) {
+        PermissionSheet(
+            permission = ui.permission!!,
+            saving = ui.permissionSaving,
+            error = ui.permissionError,
+            onSelect = { preset ->
+                if (preset == SessionPermission.PRESET_FULL) {
+                    fullAccessAcknowledged = false
+                    fullAccessConfirm = true
+                } else {
+                    viewModel.changePermission(preset)
+                }
+            },
+            onDismiss = viewModel::closePermissionSheet,
+        )
+    }
+
+    if (fullAccessConfirm) {
+        AlertDialog(
+            onDismissRequest = { fullAccessConfirm = false },
+            title = { Text("启用「全部权限」？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "全部权限会放开沙箱并关闭审批（approval=never），" +
+                            "电脑上的文件、命令与网络操作都可以直接执行。请只在信任当前任务时使用。",
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = fullAccessAcknowledged,
+                            onCheckedChange = { fullAccessAcknowledged = it },
+                        )
+                        Text("我已了解风险，并愿意继续")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = fullAccessAcknowledged,
+                    onClick = {
+                        fullAccessConfirm = false
+                        viewModel.changePermission(SessionPermission.PRESET_FULL)
+                    },
+                ) { Text("启用全部权限") }
+            },
+            dismissButton = {
+                TextButton(onClick = { fullAccessConfirm = false }) { Text("取消") }
+            },
+        )
+    }
+
     // 全屏看图：点缩略图打开，返回键/点图/右上角关闭
     if (viewerImages.isNotEmpty()) {
         ImageViewerDialog(
@@ -779,6 +846,7 @@ private fun DetailComposer(
     pendingApproval: PendingApprovalPrompt?,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
+    onPermissionClick: () -> Unit,
     onNotice: (String) -> Unit,
     // 相册 / 拍照的入口把动作交给调用方（那里才有 ActivityResultLauncher），
     // 输入区本身不认识 Activity Result API —— 它只负责"点了哪个按钮"
@@ -815,15 +883,27 @@ private fun DetailComposer(
                 .fillMaxWidth()
                 .padding(horizontal = dimens.pageMargin, vertical = 8.dp),
         ) {
-            Text(
-                // 接管时的说明行换成语义说明：这时"只读/不可续"那条已经不重要了，
-                // 用户需要知道的是"我这一答会发生什么"
-                text = ui.pendingApproval?.let { approvalComposerNote(it) } ?: composerNote(ui),
-                style = type.meta,
-                color = DshOnSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    // 接管时的说明行换成语义说明：这时"只读/不可续"那条已经不重要了，
+                    // 用户需要知道的是"我这一答会发生什么"
+                    text = ui.pendingApproval?.let { approvalComposerNote(it) } ?: composerNote(ui),
+                    style = type.meta,
+                    color = DshOnSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                // 只有真正能改的时候才给入口：网关自有会话 / 只读 / 旧网关都不画一个
+                // 点了会报错的"改权限"。当前档位就在左边那句话里。
+                if (ui.pendingApproval == null && ui.canEditPermission) {
+                    Spacer(Modifier.width(8.dp))
+                    DshChip(
+                        text = "改权限",
+                        onClick = onPermissionClick,
+                    )
+                }
+            }
             // 收不到审批时的诊断条：没有它，真机上"电脑端没启动/凭据不可用"与
             // "确实没有待答"在界面上完全一样（都是一片安静），用户只会以为 App 坏了。
             //
@@ -946,11 +1026,11 @@ private fun MenuLabel(
 /**
  * 输入区上方的权限说明（画稿 02 那一行）。
  *
- * 措辞按会话**真实**的执行方与可写状态生成，而不是写死画稿里的档位：
- * - 电脑端会话：手机在请求里根本不带 `access`（见 data/api/TaskAccess.kt 的 `accessForHost`），
- *   权限由电脑端 DSH 自己的设置决定 —— 所以只能承诺"跟随电脑端"；
- * - 网关/手机任务：档位由网关按请求下发，`TaskAccess.DEFAULT` 就是默认档（workspace-write），
- *   这里显示默认档的名字，而不是编一个具体策略；
+ * 措辞按会话**真实**的执行方、可写状态与服务端回执生成，而不是写死画稿里的档位：
+ * - 电脑端会话：显示网关回读的 `permission.currentValue`（只读/仅工作区/全部权限），
+ *   并在可改时给「改权限」入口（v2.11.0）；
+ * - 网关/手机任务：显示 `access` 决定的当前档位，并明确"创建时固定"（SDK 没有运行中 setter）；
+ * - 旧网关/电脑端离线：显示"权限未知"，**不拿默认档假装知道**；
  * - 不可写 / 不可续：直接说结论，别让用户打完字才被拒。
  */
 /**
@@ -966,8 +1046,8 @@ private fun approvalRelevant(ui: SessionDetailViewModel.UiState): Boolean =
 private fun composerNote(ui: SessionDetailViewModel.UiState): String = when {
     !ui.writable -> "只读会话 · 无法从手机发送消息"
     !ui.resumable -> "本会话已停止 · 无法继续发送"
-    ui.session?.isDesktopDriven == true -> "发送到电脑端执行 · 权限跟随电脑端（workspace-write · ask）"
-    else -> "发送到网关执行 · 权限按网关下发（${TaskAccess.DEFAULT.label}）"
+    ui.session?.isDesktopDriven == true -> "发送到电脑端执行 · ${ui.permissionNote}"
+    else -> "发送到网关执行 · ${ui.permissionNote}"
 }
 
 private fun composerPlaceholder(ui: SessionDetailViewModel.UiState): String = when {

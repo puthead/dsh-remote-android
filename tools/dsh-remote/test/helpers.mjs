@@ -68,6 +68,9 @@ export function makeDesktopStub({
   modelCatalogError = null,
   selectModelError = null,
   selectedModel = null,
+  // `commands/execute`（手机端改权限）：默认模拟一条成功的 `/permission <preset>`。
+  executeCommandError = null,
+  executeCommandResult = null,
 } = {}) {
   const items = entries.map((entry) => {
     const values = { title: entry.title ?? null, sessionStats: { turns: entry.turns ?? 0 }, ...(entry.values ?? {}) };
@@ -80,7 +83,7 @@ export function makeDesktopStub({
       projections: { kind: 'session', asOfSeq: entry.asOfSeq ?? 0, values: { ...values, ...(entry.projections?.values ?? {}) } },
     };
   });
-  const calls = { listSessions: 0, projections: [], prompt: [], cancel: [], follows: [], createWorkspace: [], createSession: [], modelCatalog: 0, selectModel: [], order: [] };
+  const calls = { listSessions: 0, projections: [], prompt: [], cancel: [], follows: [], createWorkspace: [], createSession: [], modelCatalog: 0, selectModel: [], executeCommand: [], order: [] };
   // `order` 是**跨方法**的调用顺序账本：模型选择（`session/selectModel`）必须先于首轮投递
   // （`session/prompt`）才有意义，而按方法分桶的 `calls.*` 数组证明不了先后关系。
   const note = (label) => { calls.order.push(label); };
@@ -308,6 +311,42 @@ export function makeDesktopStub({
         },
       };
     },
+    /**
+     * `commands/execute`：手机端改权限的唯一写入路径。
+     *
+     * 默认实现会**真的更新替身的投影**（`entry.projections.values.permissions` 与
+     * `projections[sessionId]`），这样"命令成功 → 网关回读 → 回执 currentValue"这条链
+     * 在测试里是闭合的，而不是靠断言一个写死的常量。
+     */
+    async executeCommand(sessionId, line) {
+      calls.executeCommand.push({ sessionId, line });
+      note('executeCommand');
+      if (executeCommandError) throw executeCommandError;
+      const result = executeCommandResult ?? { commandId: 'cmd-stub-1', result: { kind: 'success', text: 'preset ok' } };
+      // 真实 DesktopApi.executeCommand 在 `kind:error` 时抛错；替身必须同形，
+      // 否则网关会把"未知 preset"当成成功（正是本功能最不能接受的一种撒谎）。
+      if (result?.result?.kind === 'error') {
+        const error = new Error(String(result.result.text ?? '命令执行失败'));
+        error.code = 'desktop_command_failed';
+        throw error;
+      }
+      const preset = /^\/permission\s+(\S+)/.exec(String(line))?.[1] ?? null;
+      if (result?.result?.kind === 'success' && preset) {
+        const entry = find(sessionId);
+        if (entry) {
+          entry.projections ??= { kind: 'session', asOfSeq: 0, values: {} };
+          entry.projections.values ??= {};
+          entry.projections.values.permissions = { currentValue: preset };
+        }
+        const projection = projections[sessionId];
+        if (projection) {
+          projection.values = { ...(projection.values ?? {}), permissions: { currentValue: preset } };
+        } else {
+          projections[sessionId] = { values: { permissions: { currentValue: preset } }, asOfSeq: 0 };
+        }
+      }
+      return result;
+    },
     openFollow(sessionId, opts = {}) {
       if (followError) throw followError;
       // 每条订阅一条可观测记录：`closed` 只有生成器真的被关闭/耗尽（`finally`）才为 true。
@@ -391,6 +430,10 @@ export async function makeSandbox(t, overrides = {}, { autoCleanup = true } = {}
         serverName: 'test-host',
         workspaceAllowlist: [workspace],
         defaultWorkspace: workspace,
+        // 桌面端工作区同步默认指向**沙箱内**的 home：否则 `desktopWorkspaces.home` 会一路
+        // 回退到 `mirror.resolvedHome`（= 跑测试那台机器真实的 `~/.dsh`），用例结果就变成
+        // 「取决于开发者电脑上登记了几个工作区」。要测同步的用例显式覆盖 home 即可。
+        desktopWorkspaces: { home },
         dsh: {
           node: process.execPath,
           binPath: FAKE_DSH,

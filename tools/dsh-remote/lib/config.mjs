@@ -27,7 +27,7 @@ import { resolveDshHome } from './dsh-home.mjs';
  * 2.2.0：电脑端会话**实时中继**（`lib/desktop-watch.mjs`）——用户在自己电脑的 DSH 界面里发起的
  * 轮次，手机端不再"冻结"，而是实时收到 message.delta/tool.call/tool.result/turn.ended。
  */
-export const GATEWAY_VERSION = '2.10.0';
+export const GATEWAY_VERSION = '2.11.0';
 
 /**
  * `/api/v1/health` 的 `apiVersion`。
@@ -166,9 +166,32 @@ export function defaultConfig(env = process.env) {
     desktop: {
       enabled: true,
       host: '127.0.0.1',
-      // 与 lib/desktop-api.mjs 的 DEFAULT_DESKTOP_PORT 同值；这里写字面量是为了避免 config ← → desktop-api 的循环导入
+      // 与 lib/desktop-api.mjs 的 DEFAULT_DESKTOP_PORT 同值；这里写字面量是为了避免 config ← → desktop-api 的循环导入。
+      // **它只是一个提示**：桌面端 0.2.0 起用 --port 0 随机端口，autoDiscover 会在连不上时
+      // 从进程监听表里找真实端口。显式固定端口的旧版本仍在第一顺位被尝试。
       port: 19_387,
+      /**
+       * 自动发现桌面端真实端口（默认开）。关掉它 = 只认 `port`，桌面端升级到随机端口后
+       * 审批/电脑端会话/权限修改会全部不可用。
+       */
+      autoDiscover: true,
       dshHome: null,
+    },
+    /**
+     * 电脑端工作区同步（默认开）：桌面端把工作区登记在 `<desktopHome>/storages/workspace.json`，
+     * 这里定时读它并合并进网关的有效白名单 —— 手机端 `GET /api/v2/workspaces` 才能看到
+     * 电脑上新建的工作区，工作区文件接口也才认这些路径。
+     *
+     * 为什么不是走桌面端 RPC：随机端口/桌面端未运行时 `workspace/follow` 不可达，
+     * 而 `workspace.json` 是桌面端的**权威持久化**，读文件在离线时也仍然可用。
+     * 只同步该 home 里**已被用户登记**的工作区，不扫描磁盘、不扩大授权范围。
+     */
+    desktopWorkspaces: {
+      enabled: true,
+      /** 轮询间隔：桌面端新建工作区后，手机端最多晚这么久看到。 */
+      pollMs: 5_000,
+      /** null = `desktop.dshHome` / `mirror.resolvedHome` 自动。 */
+      home: null,
     },
     /**
      * 电脑端会话**实时中继**（`lib/desktop-watch.mjs`）：轮询桌面端运行态，发现"电脑端自己发起的
@@ -422,9 +445,11 @@ function validateMirror(cfg, env = process.env) {
   if (typeof desktop.host !== 'string' || !desktop.host.trim()) {
     throw new ConfigError('配置项 desktop.host 必须是非空字符串（默认 127.0.0.1）');
   }
-  if (!Number.isInteger(desktop.port) || desktop.port < 1 || desktop.port > 65_535) {
-    throw new ConfigError('配置项 desktop.port 必须是 1~65535 之间的整数（默认 19387）');
+  // 0 = 不做固定端口尝试，只靠 autoDiscover；老版本桌面端仍可用 19387。
+  if (!Number.isInteger(desktop.port) || desktop.port < 0 || desktop.port > 65_535) {
+    throw new ConfigError('配置项 desktop.port 必须是 0~65535 之间的整数（默认 19387；0 = 只自动发现）');
   }
+  if (typeof desktop.autoDiscover !== 'boolean') throw new ConfigError('配置项 desktop.autoDiscover 必须是布尔值');
   if (desktop.dshHome !== null && desktop.dshHome !== undefined) {
     if (typeof desktop.dshHome !== 'string' || !desktop.dshHome.trim()) {
       throw new ConfigError('配置项 desktop.dshHome 必须是非空字符串或 null');
@@ -473,6 +498,20 @@ function validateMirror(cfg, env = process.env) {
   mirror.resolvedHome = resolved.path;
   mirror.homeSource = resolved.source;
   cfg.mirror = mirror;
+
+  // 电脑端工作区同步：home 缺省跟 desktop / mirror 走（三者指向同一个 ~/.dsh 是常态）。
+  const desktopWorkspaces = cfg.desktopWorkspaces ?? {};
+  if (typeof desktopWorkspaces.enabled !== 'boolean') {
+    throw new ConfigError('配置项 desktopWorkspaces.enabled 必须是布尔值');
+  }
+  desktopWorkspaces.pollMs = intInRange(desktopWorkspaces.pollMs, 'desktopWorkspaces.pollMs', { min: 500, max: 600_000 });
+  if (desktopWorkspaces.home !== null && desktopWorkspaces.home !== undefined) {
+    if (typeof desktopWorkspaces.home !== 'string' || !desktopWorkspaces.home.trim()) {
+      throw new ConfigError('配置项 desktopWorkspaces.home 必须是非空字符串或 null');
+    }
+    desktopWorkspaces.home = path.resolve(desktopWorkspaces.home);
+  }
+  cfg.desktopWorkspaces = desktopWorkspaces;
 }
 
 /**

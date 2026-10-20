@@ -14,6 +14,82 @@ import org.json.JSONObject
  * 在 Compose 里能正常工作（`JSONObject` 没有值语义）。
  */
 
+/**
+ * 一个可选的权限档（网关 `permission.options[]`）。
+ *
+ * [value] 是稳定机器名（`read-only` / `workspace-write` / `danger-full-access`）；
+ * [name] 只作兜底展示（桌面端自定义 preset 表时可能出现别的名字）。
+ */
+data class PermissionOption(
+    val value: String,
+    val name: String,
+    val description: String = "",
+    val selectable: Boolean = true,
+)
+
+/**
+ * 会话权限视图（契约 §4.2 `permission`，v2.11.0）。
+ *
+ * 真值来源是电脑端会话的 `permissions` 投影（网关已归一成 stable preset 名）。
+ * [editable] 为 false 的三种真实情况必须区分清楚，界面不许把"不可改"画成"可以点"：
+ * - 电脑端离线/子代理会话：`writable=false`；
+ * - 网关自有 SDK 会话：权限在进程启动时固定，`reason="gateway_access_fixed"`；
+ * - 旧网关：整个 `permission` 字段缺失（[SessionSummary.permission] 为 null）。
+ */
+data class SessionPermission(
+    val currentValue: String,
+    val options: List<PermissionOption> = emptyList(),
+    val editable: Boolean = false,
+    /** `desktop` | `gateway` | null（老网关/未知）。 */
+    val source: String? = null,
+    /** 不可编辑的原因码（`gateway_access_fixed` 等）。 */
+    val reason: String? = null,
+) {
+    /** 当前档位的中文名（自定义值回落成原始机器名，宁可难看也不显示空白）。 */
+    val currentLabel: String get() = displayName(currentValue)
+
+    /** 是否处于危险档（界面要画风险提示/二次确认）。 */
+    val isDangerous: Boolean get() = currentValue == PRESET_FULL
+
+    /** 某个档位的展示名：known 值走中文，未知值走服务端 name 或机器名。 */
+    fun displayName(value: String): String = when (value) {
+        PRESET_READ_ONLY -> "只读"
+        PRESET_WORKSPACE -> "仅工作区"
+        PRESET_FULL -> "全部权限"
+        PRESET_CUSTOM -> "自定义"
+        else -> options.firstOrNull { it.value == value }?.name?.takeIf { it.isNotBlank() } ?: value
+    }
+
+    /** 某个档位的说明：known 值走产品文案，未知值走服务端 description。 */
+    fun descriptionOf(value: String): String = when (value) {
+        PRESET_READ_ONLY -> "只能读取；写文件与执行命令会被沙箱拒绝"
+        PRESET_WORKSPACE -> "可读写会话所在工作区；越界写与敏感操作仍会请求审批"
+        PRESET_FULL -> "放开沙箱并关闭审批；请只在信任当前任务时使用"
+        PRESET_CUSTOM -> "当前组合不在预设表内；请到电脑端确认"
+        else -> options.firstOrNull { it.value == value }?.description.orEmpty()
+    }
+
+    /** 某个档位能不能点：当前值若为 custom 只展示、不可选。 */
+    fun canSelect(option: PermissionOption): Boolean = option.selectable && option.value != PRESET_CUSTOM
+
+    companion object {
+        const val PRESET_READ_ONLY = "read-only"
+        const val PRESET_WORKSPACE = "workspace-write"
+        const val PRESET_FULL = "danger-full-access"
+        const val PRESET_CUSTOM = "custom"
+
+        const val SOURCE_DESKTOP = "desktop"
+        const val SOURCE_GATEWAY = "gateway"
+
+        /** 网关 `access`（`workspace` / `full`）→ 预设名；只用于旧网关兼容展示。 */
+        fun presetForAccess(access: String?): String = when (access?.trim()?.lowercase()) {
+            "full" -> PRESET_FULL
+            "read-only" -> PRESET_READ_ONLY
+            else -> PRESET_WORKSPACE
+        }
+    }
+}
+
 /** 契约 §4.2 `GET /api/v2/sessions` 的一项。 */
 data class SessionSummary(
     val id: String,
@@ -98,6 +174,13 @@ data class SessionSummary(
      * 老网关（2.0.0）不下发该字段，由 [createdBy] 按 source 回退成旧行为。
      */
     val createdByFlag: String? = null,
+    /**
+     * 会话权限视图（契约 §4.2 `permission`，v2.11.0）。
+     *
+     * null = 旧网关没这个字段，或电脑端离线拿不到投影；界面必须显示"未知/不可改"
+     * 而不是拿一个默认档假装知道。
+     */
+    val permission: SessionPermission? = null,
 ) {
     /** 工作区末段目录名：列表里显示全路径太吵。 */
     val workspaceLabel: String get() = WorkspaceLabels.label(workspace)
@@ -208,6 +291,19 @@ data class SessionSummary(
 
     /** 驱动方文案（详情页副标题）。 */
     val driverLabel: String get() = if (isDesktopDriven) "电脑驱动" else "网关驱动"
+
+    /** 手机上能不能改这个会话的权限（电脑端会话 + 可写 + 网关宣告 editable）。 */
+    val canEditPermission: Boolean get() = writable && permission?.editable == true
+
+    /**
+     * 权限那行说明：已知就报当前档，未知则如实说"不知道"。
+     *
+     * 旧网关的 computer 会话没有 `permission` 字段 —— 这时**不能**拿 `workspace-write`
+     * 当默认值（用户可能早就在电脑端开了全部权限，报错档位比不报更糟）。
+     */
+    val permissionLabel: String
+        get() = permission?.currentLabel
+            ?: if (isComputerSession) "权限未知" else "权限未知（旧网关）"
 
     /**
      * 不可写时的一句**原因**（不含"接下来怎么办"的建议——那半句由界面按来源补）。
@@ -752,6 +848,17 @@ data class CreateTaskOutcome(
     val modelApplied: Boolean? = null,
     /** 模型没生效的原因（人类可读，直接展示）；仅 [modelApplied] == false 时有值。 */
     val modelWarning: String? = null,
+    /**
+     * 请求的权限档**是否真的生效了**（v2.11.0；电脑端执行时由网关在首轮投递前设置）。
+     *
+     * - `false`：权限设置失败，任务仍按电脑端原档位跑；必须把 [permissionWarning] 展示出来；
+     * - `null`：没请求权限（老客户端），或网关是旧版本不回该字段。
+     */
+    val permissionApplied: Boolean? = null,
+    /** 权限没生效的原因；仅 [permissionApplied] == false 时有值。 */
+    val permissionWarning: String? = null,
+    /** 网关回执的会话权限视图（创建后界面可立即显示当前档位）。 */
+    val permission: SessionPermission? = null,
 ) {
     /** 生效档位（未知/缺失一律按默认档理解）。 */
     val taskAccess: TaskAccess get() = TaskAccess.fromWire(access)
@@ -771,13 +878,16 @@ data class CreateTaskOutcome(
 /**
  * 创建成功后给用户一句"这次到底在哪跑、以哪种权限跑的"。
  *
- * 两条硬要求（抽成纯函数就是为了在单测里钉住它们）：
- * - 落电脑端时**不许谈权限档**：权限跟随电脑端 DSH 自己的设置，手机端根本没指定
- *   （请求也不带 `access`，回执里也没有），说成"已按某档执行"就是撒谎；
- * - 旧网关（不带 `access` 回执）必须说清楚是**按默认档**执行的，否则用户勾了「全部权限」
- *   却只拿到工作区档，会以为任务失败或网关坏掉。
+ * 三条硬要求（抽成纯函数就是为了在单测里钉住它们）：
+ * - **权限没生效就要说没生效**：`permissionApplied=false` 时不能写成"已按某档执行"；
+ * - 落电脑端且真的回执了 `access`：按回执说（v2.11.0 起电脑端也能选全部权限）；
+ * - 旧网关/老路径（没有 access 回执）必须说清楚是**按默认档**执行的，否则用户勾了
+ *   「全部权限」却只拿到工作区档，会以为任务失败或网关坏掉。
  */
 fun CreateTaskOutcome.placementNote(): String = when {
+    permissionApplied == false -> "（已在电脑端执行；权限没切上，可在对话里重试）"
+    runsOnDesktop && access != null && taskAccess.isDangerous -> "（已在电脑端执行；权限：全部权限）"
+    runsOnDesktop && access != null -> "（已在电脑端执行；权限：仅工作区）"
     runsOnDesktop -> "（已在电脑端执行，电脑上也能看到；权限跟随电脑端 DSH 设置）"
     access == null -> "（网关未回执权限档，按「仅当前工作区」执行）"
     taskAccess.isDangerous -> "（已按「全部权限」执行）"
@@ -869,8 +979,23 @@ data class WorkspaceSummary(
     val changed: Int,
     val insertions: Int,
     val deletions: Int,
+    /**
+     * 来源（v2.11.0）：`desktop` = 从电脑端 `workspace.json` 同步来的；
+     * `config` = 只在网关配置白名单里。旧网关没有该字段 → 空串（界面不显示来源）。
+     */
+    val source: String = "",
+    /** 电脑端工作区的显示标题（有则优先于 [label]）。 */
+    val title: String? = null,
+    /** 电脑端工作区里的会话数（仅 `source=desktop` 时有值）。 */
+    val sessionCount: Int = 0,
 ) {
     val isGit: Boolean get() = vcs == "git"
+
+    /** 列表主标题：电脑端标题优先，其次 basename。 */
+    val displayName: String get() = title?.takeIf { it.isNotBlank() } ?: label
+
+    /** 是否来自电脑端同步（界面画一个轻量「电脑」标记）。 */
+    val isDesktopSynced: Boolean get() = source == "desktop"
 }
 
 /** `POST /api/v2/pair/claim` 的响应（含 §2.3 的 `relay` 块）。 */
