@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +35,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.deepseek.dshremote.Graph
 import com.deepseek.dshremote.data.api.FileContent
+import com.deepseek.dshremote.data.api.ImageRef
+import com.deepseek.dshremote.data.api.isWorkspaceImage
+import com.deepseek.dshremote.data.api.workspaceImageRef
+import com.deepseek.dshremote.ui.components.MessageImageStrip
+import com.deepseek.dshremote.ui.components.ImageViewerDialog
+import com.deepseek.dshremote.ui.markdown.LocalMarkdownImages
+import com.deepseek.dshremote.ui.markdown.MarkdownImages
 import com.deepseek.dshremote.data.api.WorkspacePaths
 import com.deepseek.dshremote.ui.components.CodeView
 import com.deepseek.dshremote.ui.components.DshCard
@@ -57,6 +66,8 @@ private sealed interface FileLoadState {
 
     data class Ok(val file: FileContent) : FileLoadState
 
+    data class Picture(val ref: ImageRef) : FileLoadState
+
     data class Fail(val message: String) : FileLoadState
 }
 
@@ -72,10 +83,21 @@ fun FileViewerScreen(workspace: String, path: String, onBack: () -> Unit) {
     var reload by remember { mutableIntStateOf(0) }
     var showLineNumbers by rememberSaveable { mutableStateOf(true) }
     val isMarkdown = remember(path) { WorkspacePaths.isMarkdown(path) }
+    val isImage = remember(path) { isWorkspaceImage(path) }
+    var viewer by remember(path) { mutableStateOf<List<ImageRef>>(emptyList()) }
+    val loader = Graph.repository.images
+    val openImage: (List<ImageRef>, Int) -> Unit = { images, _ -> viewer = images }
+    val imageContext = MarkdownImages(workspace, loader, openImage,
+        path.replace('\\', '/').substringBeforeLast('/', workspace))
     var preview by rememberSaveable(path) { mutableStateOf(true) }
 
-    val state by produceState<FileLoadState>(FileLoadState.Loading, path, reload) {
+    val state by produceState<FileLoadState>(FileLoadState.Loading, workspace, path, reload) {
         value = FileLoadState.Loading
+        if (isImage) {
+            value = workspaceImageRef(path, workspace)?.let { FileLoadState.Picture(it) }
+                ?: FileLoadState.Fail("无法解析图片路径")
+            return@produceState
+        }
         value = runCatching { Graph.repository.loadFile(path) }.fold(
             onSuccess = { result ->
                 result.fold(
@@ -104,7 +126,7 @@ fun FileViewerScreen(workspace: String, path: String, onBack: () -> Unit) {
                         onClick = { preview = !preview },
                     )
                 }
-                if (!isMarkdown || !preview) {
+                if (!isImage && (!isMarkdown || !preview)) {
                     DshToggleIconButton(
                         icon = Icons.Default.FormatListNumbered,
                         contentDescription = if (showLineNumbers) "隐藏行号" else "显示行号",
@@ -121,6 +143,12 @@ fun FileViewerScreen(workspace: String, path: String, onBack: () -> Unit) {
         )
 
         when (val current = state) {
+            is FileLoadState.Picture -> key(workspace, path, reload) {
+                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MessageImageStrip(listOf(current.ref), loader, { viewer = listOf(current.ref) }, Modifier.fillMaxWidth())
+                    Text("点击图片查看大图", style = LocalDshType.current.meta, color = DshOnSurfaceVariant)
+                }
+            }
             FileLoadState.Loading -> Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -157,11 +185,13 @@ fun FileViewerScreen(workspace: String, path: String, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 when {
                     file.binary -> EmptyHint("这是二进制文件（${Fmt.size(file.size)}），不展示内容。")
-                    isMarkdown && preview -> MarkdownBlockList(
-                        text = file.text,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                    )
+                    isMarkdown && preview -> CompositionLocalProvider(LocalMarkdownImages provides imageContext) {
+                        MarkdownBlockList(
+                            text = file.text,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+                        )
+                    }
 
                     else -> CodeView(
                         text = file.text,
@@ -172,4 +202,5 @@ fun FileViewerScreen(workspace: String, path: String, onBack: () -> Unit) {
             }
         }
     }
+    if (viewer.isNotEmpty()) ImageViewerDialog(viewer, 0, loader, { viewer = emptyList() })
 }

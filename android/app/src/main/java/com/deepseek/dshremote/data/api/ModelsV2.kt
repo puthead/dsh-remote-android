@@ -428,6 +428,8 @@ data class ImageRef(
     val height: Int? = null,
     val bytes: Int? = null,
     val name: String? = null,
+    val path: String? = null,
+    val workspace: String? = null,
 ) {
     /** 这张图能不能真的取回来（没有 id 的引用只用于占位，别去请求）。 */
     val isFetchable: Boolean get() = id.startsWith("sha256:") && id.length == 71
@@ -497,6 +499,7 @@ data class ChatMessage(
      * 而不是再取一次同样的数据。
      */
     val turn: Int? = null,
+    val reasoning: String = "",
 ) {
     val isUser: Boolean get() = role == "user"
 
@@ -504,7 +507,7 @@ data class ChatMessage(
 
     val isEmpty: Boolean
         get() = text.isBlank() && toolCalls.isEmpty() && deliverables.isEmpty() &&
-            todos.isEmpty() && images.isEmpty()
+            todos.isEmpty() && images.isEmpty() && reasoning.isBlank()
 }
 
 /**
@@ -523,12 +526,20 @@ object LiveDraftMerge {
      * `seq` 取事件给出的值；事件没给（例如只有一个纯文本帧）时保留旧值，
      * 新建草稿则用 0（与本地乐观消息同一约定：[ChatMessage.seq] 恒由服务端投影覆盖）。
      */
-    fun delta(existing: ChatMessage?, seq: Long?, role: String, text: String, at: Long): ChatMessage =
-        if (existing == null) {
-            ChatMessage(seq = seq ?: 0L, role = role, at = at, text = text)
-        } else {
-            existing.copy(text = existing.text + text, seq = seq ?: existing.seq)
-        }
+    fun delta(
+        existing: ChatMessage?, seq: Long?, role: String, text: String, at: Long,
+        channel: String = "text", reasoning: String = "",
+        messageBoundary: Boolean = false,
+    ): ChatMessage {
+        val base = existing ?: ChatMessage(seq = seq ?: 0L, role = role, at = at, text = "")
+        val isThought = channel == "reasoning" || channel == "thinking"
+        val separator = if (messageBoundary && !isThought && base.text.isNotBlank() && text.isNotBlank()) "\n\n" else ""
+        return base.copy(
+            text = base.text + if (isThought) "" else separator + text,
+            reasoning = base.reasoning + if (isThought) text else reasoning,
+            seq = seq ?: base.seq,
+        )
+    }
 
     /** `tool/start`：没有草稿就先起一条空的 assistant 消息，再把工具调用挂上去。 */
     fun toolStarted(

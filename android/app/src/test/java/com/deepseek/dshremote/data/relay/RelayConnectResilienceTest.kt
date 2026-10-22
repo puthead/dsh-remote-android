@@ -60,8 +60,10 @@ class RelayConnectResilienceTest {
             )
             assertEquals("重试前必须先退避一次", 1, slept.size)
         } finally {
-            gate.close()
+            // Cancel the receiver before closing its test channel; otherwise Unconfined
+            // resumes receive() with an uncaught exception that leaks into later tests.
             scope.cancel()
+            gate.close()
         }
     }
 
@@ -99,8 +101,10 @@ class RelayConnectResilienceTest {
             assertEquals("重连循环必须还活着，而不是随异常一起死掉", 2, calls)
             assertTrue(client.state.value is RelayState.Retrying)
         } finally {
-            gate.close()
+            // Cancel the receiver before closing its test channel; otherwise Unconfined
+            // resumes receive() with an uncaught exception that leaks into later tests.
             scope.cancel()
+            gate.close()
         }
     }
 }

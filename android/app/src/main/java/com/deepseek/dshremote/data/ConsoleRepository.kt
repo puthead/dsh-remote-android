@@ -794,6 +794,7 @@ class ConsoleRepository(
         val clientTexts = localClientTexts[sessionId]
         val stillLocal = localMessages.getOrPut(sessionId) { mutableListOf() }.filterNot { local ->
             page.messages.any { server -> isSameEcho(server, local, clientTexts?.get(local)) }
+                .also { adopted -> if (adopted) pager.removeLocal(local) }
         }
         localMessages[sessionId] = stillLocal.toMutableList()
         // 被服务端权威投影接管的那几条，连同"原话"一起清掉，别让两份记账各自漂移
@@ -1340,6 +1341,9 @@ class ConsoleRepository(
                 seq = event.seq,
                 role = event.role,
                 text = event.text,
+                channel = event.channel,
+                reasoning = event.reasoning,
+                messageBoundary = event.messageBoundary,
                 at = now(),
             )
             drafts + (event.sessionId to merged)
@@ -1464,7 +1468,7 @@ class ConsoleRepository(
          * 本地回声永不被摘除，每轮刷新又被 [ConsoleRepository.restoreLocalMessages] upsert 回窗口，
          * 屏幕上就是并排两条一模一样的用户气泡（纯文本回合文案相等，所以不中招 —— 与实测吻合）。
          *
-         *   对`（查看这张图片）`；原话是空串 ⇒ 有意不合并，本地那句 "1 张图片" 对用户更清楚。
+         * 纯图片回合按附件数与网关占位文本对齐，权威图片到达后删除本地占位气泡。
          *
          * 判据按"强度从高到低"三级，越靠前越不可能误判：
          *
@@ -1485,6 +1489,10 @@ class ConsoleRepository(
             if (kotlin.math.abs(server.at - local.at) >= LOCAL_ECHO_WINDOW_MS) return false
             if (server.text == local.text) return true
             if (clientText != null && clientText.isNotEmpty() && server.text == clientText) return true
+            if (clientText.isNullOrEmpty() && server.images.isNotEmpty() &&
+                local.text == echoText("", server.images.size) &&
+                (server.text.isEmpty() || server.text == "（查看这张图片）")
+            ) return true
             // 兜底：本地记账里没有这条的原话时（不该发生），仍然允许按 `[N 张图片]` 前缀剥壳比对。
             // 代价已明确：用户正文**恰好**以 `[N 张图片] ` 开头时，本地那条也会被摘掉，
             // 而服务端那条正文相同、图还在（信息不丢），最多差一个前缀。相比"漏合就永久多一条气泡"，

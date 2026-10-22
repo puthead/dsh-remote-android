@@ -27,7 +27,7 @@ import { resolveDshHome } from './dsh-home.mjs';
  * 2.2.0：电脑端会话**实时中继**（`lib/desktop-watch.mjs`）——用户在自己电脑的 DSH 界面里发起的
  * 轮次，手机端不再"冻结"，而是实时收到 message.delta/tool.call/tool.result/turn.ended。
  */
-export const GATEWAY_VERSION = '2.11.0';
+export const GATEWAY_VERSION = '2.12.0';
 
 /**
  * `/api/v1/health` 的 `apiVersion`。
@@ -321,6 +321,9 @@ export function resolveHome(config, { cliHome = null, env = process.env } = {}) 
  */
 export function validateConfig(config, { cliHome = null, env = process.env } = {}) {
   const cfg = mergeConfig(defaultConfig(env), config);
+  // 安装脚本会持久化整份默认配置；旧配置中的版本不能覆盖当前运行的实现版本。
+  cfg.gatewayVersion = GATEWAY_VERSION;
+  if (cfg.relay) cfg.relay.gatewayVersion = GATEWAY_VERSION;
   const intIn = intInRange;
 
   intIn(cfg.port, 'port', { min: 0, max: 65535 }); // 0 = 由系统分配（测试用）

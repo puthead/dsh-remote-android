@@ -21,8 +21,8 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarHost
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -74,7 +74,7 @@ fun PairingScreen(onPaired: () -> Unit) {
     val viewModel = appViewModel { SettingsViewModel(Graph.repository, Graph.appContext) }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val relayState by viewModel.relayState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     val focusManager = LocalFocusManager.current
 
     // 展示完就消费掉：message 不清空的话，每次回到本页都会用没变的 key 重跑一遍，同一条反复弹。
@@ -82,14 +82,14 @@ fun PairingScreen(onPaired: () -> Unit) {
     // 注意本页与设置页共用同一个 SettingsViewModel 实例，消费对两页同时生效。
     LaunchedEffect(ui.message) {
         val shown = ui.message ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(shown)
+        snackbarHostState.showMessage(shown)
         if (shouldConsumeSnackbarMessage(ui.message, ui.isError)) viewModel.consumeMessage()
     }
     LaunchedEffect(ui.paired) {
         if (ui.paired) onPaired()
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+    Scaffold(snackbarHost = { DshSnackbarHost(snackbarHostState) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()

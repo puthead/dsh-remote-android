@@ -51,6 +51,7 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.deepseek.dshremote.ui.components.Hairline
+import com.deepseek.dshremote.ui.components.MessageImageStrip
 import com.deepseek.dshremote.ui.theme.DshCodeText
 import com.deepseek.dshremote.ui.theme.DshOnBackground
 import com.deepseek.dshremote.ui.theme.DshOnSurfaceVariant
@@ -223,17 +224,9 @@ private fun mdStyles(textStyle: TextStyle, color: Color, compact: Boolean): MdSt
 @Composable
 private fun MarkdownBlockView(block: MdBlock, styles: MdStyles, caret: String) {
     when (block) {
-        is MdBlock.Heading -> Text(
-            text = inlineText(block.inlines, caret, styles),
-            style = headingStyle(block.level),
-            color = styles.color,
-        )
+        is MdBlock.Heading -> InlineContent(block.inlines, caret, styles, headingStyle(block.level))
 
-        is MdBlock.Paragraph -> Text(
-            text = inlineText(block.inlines, caret, styles),
-            style = styles.text,
-            color = styles.color,
-        )
+        is MdBlock.Paragraph -> InlineContent(block.inlines, caret, styles)
 
         is MdBlock.CodeBlock -> CodeBlockView(block, styles)
 
@@ -245,6 +238,30 @@ private fun MarkdownBlockView(block: MdBlock, styles: MdStyles, caret: String) {
         MdBlock.Rule -> Hairline(modifier = Modifier.padding(vertical = 2.dp))
 
         is MdBlock.Table -> TableView(block, styles)
+    }
+}
+
+@Composable
+private fun InlineContent(
+    nodes: List<MdInline>, caret: String, styles: MdStyles,
+    textStyle: TextStyle = styles.text, modifier: Modifier = Modifier,
+    textAlign: TextAlign = TextAlign.Start,
+) {
+    val context = LocalMarkdownImages.current
+    val segments = remember(nodes) { imageSegments(nodes) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        segments.forEachIndexed { index, part ->
+            val picture = part.singleOrNull() as? MdInline.Image
+            val ref = picture?.let { context?.resolve(it) }
+            if (ref != null && context != null) {
+                MessageImageStrip(listOf(ref), context.loader, { context.onOpen(listOf(ref), 0) }, Modifier.fillMaxWidth())
+            } else {
+                Text(
+                    text = inlineText(part, if (index == segments.lastIndex) caret else "", styles),
+                    style = textStyle, color = styles.color, textAlign = textAlign,
+                )
+            }
+        }
     }
 }
 
@@ -420,10 +437,9 @@ private fun TableRowView(
             .background(if (headerBackground) DshSurfaceHigh else Color.Transparent),
     ) {
         cells.forEachIndexed { index, cell ->
-            Text(
-                text = inlineText(cell, "", styles),
-                style = if (headerBackground) cellStyle.copy(fontWeight = FontWeight.SemiBold) else cellStyle,
-                color = styles.color,
+            InlineContent(
+                nodes = cell, caret = "", styles = styles,
+                textStyle = if (headerBackground) cellStyle.copy(fontWeight = FontWeight.SemiBold) else cellStyle,
                 textAlign = textAlignOf(aligns.getOrElse(index) { MdAlign.NONE }),
                 modifier = Modifier
                     .weight(1f)

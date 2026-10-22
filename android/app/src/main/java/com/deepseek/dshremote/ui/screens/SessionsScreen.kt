@@ -36,8 +36,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarHost
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -143,7 +143,7 @@ fun ComputerSessionsScreen(onOpenSession: (String) -> Unit, onCreateTask: () -> 
     val viewModel = appViewModel { SessionsViewModel(Graph.repository) }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val relayState by viewModel.relayState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     val scope = rememberCoroutineScope()
     var filter by rememberSaveable { mutableStateOf(SessionFilter.All) }
 
@@ -156,7 +156,7 @@ fun ComputerSessionsScreen(onOpenSession: (String) -> Unit, onCreateTask: () -> 
     // 只消费非错误提示，错误原因要留在屏幕上（判据与完整理由见 MessageConsumption.kt）。
     LaunchedEffect(ui.message) {
         val shown = ui.message ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(shown)
+        snackbarHostState.showMessage(shown)
         if (shouldConsumeSnackbarMessage(ui.message, ui.isError)) viewModel.consumeMessage()
     }
 
@@ -198,7 +198,7 @@ fun ComputerSessionsScreen(onOpenSession: (String) -> Unit, onCreateTask: () -> 
                 relayState = relayState,
                 onClick = {
                     viewModel.refresh()
-                    scope.launch { snackbarHostState.showSnackbar(bannerHint(relayState)) }
+                    scope.launch { snackbarHostState.showMessage(bannerHint(relayState)) }
                 },
             )
         },
@@ -239,7 +239,7 @@ fun ComputerSessionsScreen(onOpenSession: (String) -> Unit, onCreateTask: () -> 
                     onClick = { onOpenSession(session.id) },
                     // 只读**不静默**：点行内胶囊给原因，不跳详情页（用户可能只是想知道为什么不能发）
                     onStatusClick = {
-                        scope.launch { snackbarHostState.showSnackbar(status.hint) }
+                        scope.launch { snackbarHostState.showMessage(status.hint) }
                     },
                 )
                 if (index != visible.lastIndex) Hairline(inset = dimens.hairlineInset)
@@ -751,7 +751,7 @@ internal fun SessionListScaffold(
     title: String,
     subtitle: String,
     subtitleWarning: Boolean,
-    snackbarHostState: SnackbarHostState,
+    snackbarHostState: DshSnackbarState,
     refreshing: Boolean,
     onRefresh: () -> Unit,
     query: String,
@@ -776,7 +776,7 @@ internal fun SessionListScaffold(
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     val searchVisible = searchOpen || query.isNotBlank()
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+    Scaffold(snackbarHost = { DshSnackbarHost(snackbarHostState) }) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()

@@ -358,10 +358,17 @@ class DshApiV2(
      * 失败抛 [ApiException]：`not_found`（对象库没有这张图，通常是电脑端清理过）、
      * `bad_request`（id 形状不对）、`attachment_too_large`（超过网关上限 8 MiB）。
      */
-    suspend fun fetchAttachment(id: String): ByteArray {
+    suspend fun fetchWorkspaceImage(path: String, workspace: String?): ByteArray = fetchImageBytes(
+        "/api/v2/workspaces/file" + query("workspace" to workspace, "path" to path, "format" to "image"),
+    )
+
+    suspend fun fetchAttachment(id: String): ByteArray =
+        fetchImageBytes("/api/v2/attachments/${encodePath(id)}")
+
+    private suspend fun fetchImageBytes(path: String): ByteArray {
         val response = tunnel.execute(
             method = "GET",
-            path = "/api/v2/attachments/${encodePath(id)}",
+            path = path,
             headers = mapOf("Accept" to "*/*"),
             timeoutMs = attachmentTimeoutMs,
         )
@@ -372,6 +379,9 @@ class DshApiV2(
                 fallbackMessage = "图片下载失败 HTTP ${response.status}",
             )
         }
+        if (path.startsWith("/api/v2/workspaces/file") &&
+            response.headers.entries.none { it.key.equals("Content-Type", true) && it.value.startsWith("image/", true) }
+        ) throw IllegalStateException("电脑端网关尚未支持图片预览，请更新并重启网关")
         return response.body
     }
 

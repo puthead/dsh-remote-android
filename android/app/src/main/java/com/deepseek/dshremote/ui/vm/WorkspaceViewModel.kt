@@ -10,6 +10,10 @@ import com.deepseek.dshremote.data.api.WorkspaceLabels
 import com.deepseek.dshremote.data.api.WorkspacePaths
 import com.deepseek.dshremote.data.api.WorkspaceSummary
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
+import com.deepseek.dshremote.data.api.DirListing
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,7 +26,21 @@ import kotlinx.coroutines.launch
  * 所有路径在发请求前都过一遍 [WorkspacePaths.normalize]（客户端侧第二道闸），
  * 越界直接拒绝，不会打到网关。
  */
-class WorkspaceViewModel(private val repository: ConsoleRepository) : ViewModel() {
+interface WorkspaceDataSource {
+    suspend fun loadWorkspaces(): Result<List<WorkspaceSummary>>
+    suspend fun loadEntries(path: String, showHidden: Boolean): Result<DirListing>
+    suspend fun loadChanges(workspace: String): Result<ChangeSet>
+    suspend fun search(query: String, workspace: String?): Result<List<SearchHit>>
+}
+
+class WorkspaceViewModel(private val repository: WorkspaceDataSource) : ViewModel() {
+    constructor(repository: ConsoleRepository) : this(object : WorkspaceDataSource {
+        override suspend fun loadWorkspaces() = repository.loadWorkspaces()
+        override suspend fun loadEntries(path: String, showHidden: Boolean) =
+            repository.loadEntries(path, depth = 1, showHidden = showHidden)
+        override suspend fun loadChanges(workspace: String) = repository.loadChanges(workspace)
+        override suspend fun search(query: String, workspace: String?) = repository.search(query, workspace)
+    })
 
     enum class Tab { FILES, CHANGES, SEARCH }
 
@@ -36,7 +54,13 @@ class WorkspaceViewModel(private val repository: ConsoleRepository) : ViewModel(
         val searchQuery: String = "",
         val hits: List<SearchHit> = emptyList(),
         val tab: Tab = Tab.FILES,
-        val loading: Boolean = false,
+        val directoryLoading: Boolean = false,
+        val workspacesLoading: Boolean = false,
+        val changesLoading: Boolean = false,
+        val searching: Boolean = false,
+        val searchCompleted: Boolean = false,
+        val searchError: String? = null,
+        val changesError: String? = null,
         val showHidden: Boolean = false,
         val message: String? = null,
         val isError: Boolean = false,
@@ -54,6 +78,7 @@ class WorkspaceViewModel(private val repository: ConsoleRepository) : ViewModel(
          */
         val dirError: String? = null,
     ) {
+        val loading: Boolean get() = directoryLoading || workspacesLoading || changesLoading || searching
         val crumbs: List<Pair<String, String>> get() = WorkspacePaths.breadcrumbs(relativePath)
         val workspaceLabel: String get() = WorkspaceLabels.label(currentWorkspace).ifEmpty { "工作区" }
         val canGoUp: Boolean get() = relativePath.isNotEmpty()
@@ -65,38 +90,60 @@ class WorkspaceViewModel(private val repository: ConsoleRepository) : ViewModel(
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     private var bootstrapped = false
+    private var workspaceJob: Job? = null
+    private var directoryJob: Job? = null
+    private var changesJob: Job? = null
+    private var searchJob: Job? = null
 
-    /** 首次进入工作区页；[hint] 是会话详情带过来的工作区路径（优先选中它）。 */
     fun bootstrap(hint: String? = null) {
         if (bootstrapped && hint.isNullOrEmpty()) return
-        bootstrapped = true
-        viewModelScope.launch {
-            _ui.update { it.copy(loading = true) }
-            repository.loadWorkspaces()
-                .onSuccess { list ->
-                    val selected = when {
-                        hint != null && list.any { it.path.equals(hint, ignoreCase = true) } -> hint
-                        _ui.value.currentWorkspace.isNotEmpty() -> _ui.value.currentWorkspace
-                        else -> list.firstOrNull { it.exists }?.path ?: list.firstOrNull()?.path.orEmpty()
-                    }
-                    _ui.update { it.copy(workspaces = list, currentWorkspace = selected) }
-                    if (selected.isNotEmpty()) {
-                        loadDir("")
-                        loadChanges()
-                    } else {
-                        _ui.update { it.copy(message = "没有可用的工作区（请检查 PC 网关的白名单配置）", isError = true) }
-                    }
+        reloadWorkspaces(hint)
+    }
+
+    private fun reloadWorkspaces(hint: String? = null) {
+        workspaceJob?.cancel()
+        _ui.update { it.copy(workspacesLoading = true) }
+        workspaceJob = viewModelScope.launch {
+            val result = repository.loadWorkspaces()
+            coroutineContext.ensureActive()
+            _ui.update { it.copy(workspacesLoading = false) }
+            result.onSuccess { list ->
+                bootstrapped = true
+                val old = _ui.value.currentWorkspace
+                val selected = list.firstOrNull { it.path.equals(hint ?: old, ignoreCase = true) }?.path
+                    ?: list.firstOrNull { it.exists }?.path ?: list.firstOrNull()?.path.orEmpty()
+                _ui.update { it.copy(workspaces = list, message = null, isError = false) }
+                if (selected != old || selected.isEmpty()) resetWorkspace(selected)
+                if (selected.isNotEmpty()) {
+                    loadDir(_ui.value.relativePath)
+                    loadChanges()
+                    if (_ui.value.tab == Tab.SEARCH && _ui.value.searchQuery.isNotBlank()) runSearch()
+                } else {
+                    _ui.update { it.copy(message = "没有可用的工作区，请在电脑端添加工作区后刷新", isError = true) }
                 }
-                .onFailure { error ->
-                    _ui.update { it.copy(message = "加载工作区失败：${error.friendlyMessage()}", isError = true) }
-                }
-            _ui.update { it.copy(loading = false) }
+            }.onFailure { error ->
+                _ui.update { it.copy(message = "加载工作区失败：${error.friendlyMessage()}", isError = true) }
+            }
+        }
+    }
+
+    private fun resetWorkspace(path: String) {
+        directoryJob?.cancel()
+        changesJob?.cancel()
+        searchJob?.cancel()
+        _ui.update {
+            it.copy(currentWorkspace = path, relativePath = "", entries = emptyList(), changes = null,
+                hits = emptyList(), truncated = false, dirError = null, changesError = null,
+                searchError = null, searchCompleted = false, directoryLoading = false,
+                changesLoading = false, searching = false, message = null, isError = false)
         }
     }
 
     fun selectWorkspace(path: String) {
         if (path == _ui.value.currentWorkspace) return
-        _ui.update { it.copy(currentWorkspace = path, relativePath = "", entries = emptyList(), changes = null, hits = emptyList(), dirError = null) }
+        workspaceJob?.cancel()
+        _ui.update { it.copy(workspacesLoading = false) }
+        resetWorkspace(path)
         bootstrapped = true
         loadDir("")
         loadChanges()
@@ -129,31 +176,35 @@ class WorkspaceViewModel(private val repository: ConsoleRepository) : ViewModel(
         loadDir(parent)
     }
 
-    fun refresh() {
-        loadDir(_ui.value.relativePath)
-        loadChanges()
-    }
+    fun refresh() = reloadWorkspaces()
+
+    fun retryDirectory() = loadDir(_ui.value.relativePath)
 
     private fun loadDir(relative: String) {
         val state = _ui.value
         if (state.currentWorkspace.isEmpty()) return
-        viewModelScope.launch {
-            _ui.update { it.copy(loading = true) }
+        directoryJob?.cancel()
+        _ui.update { it.copy(directoryLoading = true, relativePath = relative, entries = emptyList(),
+            truncated = false, dirError = null) }
+        directoryJob = viewModelScope.launch {
             val absolute = WorkspacePaths.absolute(state.currentWorkspace, relative)
             try {
-                repository.loadEntries(absolute, depth = 1, showHidden = state.showHidden)
+                repository.loadEntries(absolute, showHidden = state.showHidden)
                     .onSuccess { listing ->
+                        coroutineContext.ensureActive()
                         _ui.update {
                             it.copy(
                                 relativePath = relative,
                                 entries = listing.entries,
                                 truncated = listing.truncated,
                                 message = null,
+                                isError = false,
                                 dirError = null,
                             )
                         }
                     }
                     .onFailure { error ->
+                        coroutineContext.ensureActive()
                         // 失败时清空 entries：留着上一次的内容会让人以为"就是这个目录的内容"
                         _ui.update {
                             it.copy(
@@ -168,6 +219,7 @@ class WorkspaceViewModel(private val repository: ConsoleRepository) : ViewModel(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (t: Throwable) {
+                coroutineContext.ensureActive()
                 _ui.update {
                     it.copy(
                         entries = emptyList(),
@@ -178,48 +230,52 @@ class WorkspaceViewModel(private val repository: ConsoleRepository) : ViewModel(
                     )
                 }
             } finally {
-                _ui.update { it.copy(loading = false) }
+                if (coroutineContext[Job]?.isActive == true) {
+                    _ui.update { it.copy(directoryLoading = false) }
+                }
             }
         }
     }
 
     fun loadChanges() {
-        val state = _ui.value
-        if (state.currentWorkspace.isEmpty()) return
-        viewModelScope.launch {
-            repository.loadChanges(state.currentWorkspace)
-                .onSuccess { changes -> _ui.update { it.copy(changes = changes) } }
+        val workspace = _ui.value.currentWorkspace
+        if (workspace.isEmpty()) return
+        changesJob?.cancel()
+        _ui.update { it.copy(changesLoading = true, changesError = null) }
+        changesJob = viewModelScope.launch {
+            val result = repository.loadChanges(workspace)
+            coroutineContext.ensureActive()
+            _ui.update { it.copy(changesLoading = false) }
+            result.onSuccess { changes -> _ui.update { it.copy(changes = changes) } }
                 .onFailure { error ->
-                    _ui.update { it.copy(message = "加载改动失败：${error.friendlyMessage()}", isError = true) }
+                    _ui.update { it.copy(changes = null, changesError = error.friendlyMessage()) }
                 }
         }
     }
 
-    fun onSearchChange(value: String) = _ui.update { it.copy(searchQuery = value, tab = Tab.SEARCH) }
+    fun onSearchChange(value: String) {
+        searchJob?.cancel()
+        _ui.update { it.copy(searchQuery = value, tab = Tab.SEARCH, hits = emptyList(),
+            searching = false, searchCompleted = false, searchError = null) }
+    }
 
     fun runSearch() {
         val state = _ui.value
         val query = state.searchQuery.trim()
-        if (query.isEmpty()) {
-            _ui.update { it.copy(hits = emptyList(), message = "请输入搜索关键词", isError = true) }
+        searchJob?.cancel()
+        if (query.isEmpty() || state.currentWorkspace.isEmpty()) {
+            _ui.update { it.copy(hits = emptyList(), searching = false, searchCompleted = false) }
             return
         }
-        viewModelScope.launch {
-            _ui.update { it.copy(loading = true, tab = Tab.SEARCH) }
-            repository.search(query, state.currentWorkspace.ifEmpty { null })
-                .onSuccess { hits ->
-                    _ui.update {
-                        it.copy(
-                            hits = hits,
-                            message = if (hits.isEmpty()) "没有匹配结果" else "命中 ${hits.size} 条",
-                            isError = false,
-                        )
-                    }
-                }
+        _ui.update { it.copy(searching = true, tab = Tab.SEARCH, hits = emptyList(), searchError = null) }
+        searchJob = viewModelScope.launch {
+            val result = repository.search(query, state.currentWorkspace)
+            coroutineContext.ensureActive()
+            _ui.update { it.copy(searching = false, searchCompleted = true) }
+            result.onSuccess { hits -> _ui.update { it.copy(hits = hits) } }
                 .onFailure { error ->
-                    _ui.update { it.copy(message = "搜索失败：${error.friendlyMessage()}", isError = true) }
+                    _ui.update { it.copy(searchError = error.friendlyMessage()) }
                 }
-            _ui.update { it.copy(loading = false) }
         }
     }
 

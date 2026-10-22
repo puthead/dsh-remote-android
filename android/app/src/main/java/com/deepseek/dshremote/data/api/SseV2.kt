@@ -54,6 +54,9 @@ sealed interface ConsoleEvent {
         override val seq: Long?,
         val role: String,
         val text: String,
+        val channel: String = "text",
+        val reasoning: String = "",
+        val messageBoundary: Boolean = false,
     ) : ConsoleEvent
 
     data class ToolCallStarted(
@@ -222,6 +225,9 @@ class SseV2Parser(private val delegate: SseFrameParser = SseFrameParser()) {
                 seq = obj.seqOrNull(),
                 role = obj.optString("role", "assistant"),
                 text = obj.optString("text", ""),
+                channel = obj.optString("channel", "text"),
+                reasoning = obj.optString("reasoning", ""),
+                messageBoundary = obj.optBoolean("messageBoundary", false),
             )
 
             "tool.call" -> ConsoleEvent.ToolCallStarted(

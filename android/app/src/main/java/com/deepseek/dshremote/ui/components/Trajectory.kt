@@ -43,6 +43,9 @@ fun buildTrajectory(messages: List<ChatMessage>): List<TrajectoryRow> {
         when {
             message.isUser -> add(TrajectoryKind.TURN, "你", trajectoryDetailPreview(message.text))
             else -> {
+                if (message.reasoning.isNotBlank()) {
+                    add(TrajectoryKind.THOUGHT, "思考过程", trajectoryDetailPreview(message.reasoning))
+                }
                 // 待办先出：它是"这一步要做什么"的摘要，工具调用是"真的做了什么"
                 message.todos.forEach { todo -> add(TrajectoryKind.TODO, todo.text, todo.status) }
                 message.toolCalls.forEach { call ->

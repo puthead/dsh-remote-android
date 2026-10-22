@@ -87,11 +87,10 @@ class AttachmentImageLoader(
             if (existing != null) {
                 existing to false
             } else {
-                CompletableDeferred<ImageLoadResult>() to true
+                CompletableDeferred<ImageLoadResult>().also { inflight[ref.id] = it } to true
             }
         }
         if (!owner) return pending.await()
-        synchronized(lock) { inflight[ref.id] = pending }
 
         val result = try {
             ImageLoadResult.Ready(fetchThrough(ref.id))

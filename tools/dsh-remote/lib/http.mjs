@@ -37,7 +37,7 @@ import { PhoneSessionIndex } from './phone-sessions.mjs';
 import { DesktopApi, DEFAULT_DESKTOP_PORT, translateDesktopEvent } from './desktop-api.mjs';
 import { ApprovalBridge } from './approvals.mjs';
 import { RelayClient, normalizeRelayUrl } from './relay-client.mjs';
-import { READ_MODE, WorkspaceError, listDirectory, readFileEntry, searchWorkspace } from './workspace-fs.mjs';
+import { READ_MODE, WorkspaceError, listDirectory, readFileEntry, readWorkspaceImage, searchWorkspace } from './workspace-fs.mjs';
 import { gitDiff, gitStatus, listWorkspacesWithVcs } from './workspace-git.mjs';
 import { isDerivedSession, readWorkspaceIndex, SESSION_DIR_RE } from './dsh-home.mjs';
 import { ATTACHMENT_ID_RE, ATTACHMENT_MAX_BYTES, normalizeAttachmentId, resolveAttachment } from './attachments.mjs';
@@ -100,7 +100,7 @@ export const ERROR_STATUS = Object.freeze({
 export const V2_CAPABILITIES = Object.freeze([
   'tasks', 'events', 'pairing', 'workspaces', 'cancel',
   'sessions', 'session.transcript', 'session.events', 'session.turns', 'session.abort', 'session.stream',
-  'workspace.files', 'workspace.file', 'workspace.changes', 'workspace.diff', 'workspace.search',
+  'workspace.files', 'workspace.file', 'workspace.image', 'workspace.changes', 'workspace.diff', 'workspace.search',
   'relay', 'relay.pairing', 'task.access',
   'approvals', 'approvals.answer',
   // 「电脑端自己发起的轮次也能实时推到手机」—— `lib/desktop-watch.mjs` 的实时中继。
@@ -2521,6 +2521,16 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     const requestPath = url.searchParams.get('path');
     if (!requestPath) throw new HttpError('bad_request', '缺少 path 参数');
     const workspace = await workspaceContext(url);
+    if (url.searchParams.get('format') === 'image') {
+      const image = await readWorkspaceImage({ workspace, allowlist: config.workspaceAllowlist, requestPath });
+      res.writeHead(200, {
+        'Content-Type': image.mediaType,
+        'Content-Length': image.bytes.length,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      return res.end(image.bytes);
+    }
     const result = await readFileEntry({
       workspace,
       allowlist: config.workspaceAllowlist,

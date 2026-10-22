@@ -1,7 +1,13 @@
 package com.deepseek.dshremote.ui.screens
 
+import androidx.compose.runtime.CompositionLocalProvider
+import com.deepseek.dshremote.ui.markdown.LocalMarkdownImages
+import com.deepseek.dshremote.ui.markdown.MarkdownImages
+
 import android.content.ClipData
 import android.content.ClipboardManager
+import androidx.compose.foundation.text.selection.SelectionContainer
+import com.deepseek.dshremote.ui.components.MessageCopyButton
 import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
@@ -46,8 +52,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarHost
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -140,7 +146,7 @@ fun SessionDetailScreen(
         SessionDetailViewModel(Graph.repository, sessionId)
     }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val dimens = LocalDshDimens.current
@@ -154,7 +160,7 @@ fun SessionDetailScreen(
     // 8 MB 的原图在 UI 线程解一次就是一次可见的掉帧，甚至 OOM。
     val imagePicker = rememberImagePicker(
         onPicked = { uri, displayName -> viewModel.attachImage(uri, displayName) },
-        onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
+        onError = { message -> scope.launch { snackbarHostState.showMessage(message) } },
     )
 
     var showTodos by rememberSaveable { mutableStateOf(true) }
@@ -264,7 +270,7 @@ fun SessionDetailScreen(
         // 修复前它会在每次进入/重建本页时重复出现；修复后同一条文案只会出现一次，
         // 紧接着一行 consumed=true（错误条则是 consumed=false, keep-as-error）。
         if (BuildConfig.DEBUG) Log.d(TagSnackbar, "snackbar-effect fire: $shown")
-        snackbarHostState.showSnackbar(shown)
+        snackbarHostState.showMessage(shown)
         val consume = shouldConsumeSnackbarMessage(ui.message, ui.isError)
         if (consume) viewModel.consumeMessage()
         if (BuildConfig.DEBUG) {
@@ -275,12 +281,16 @@ fun SessionDetailScreen(
     // 末尾标识：只有"末尾这一条换了"才需要贴底。
     // 为什么不用 messages.size 当触发条件：加载更早也会让 size 变大，而那时用户正在往回看，
     // 一次 animateScrollToItem 就把人拽回底部，分页等于白做（旧实现正是被这个抵消的）。
-    val conversationTail: Any? = ui.messages.lastOrNull()?.let { Triple(it.seq, it.text.length, it.toolCalls.size) }
+    val readableMessages = remember(ui.messages) { conversationMessages(ui.messages) }
+    val messageKeys = remember(readableMessages, ui.streaming) { conversationKeys(readableMessages, ui.streaming) }
+    val hiddenToolCount = ui.messages.sumOf { it.toolCalls.size }
+    val failedToolCount = ui.messages.sumOf { message -> message.toolCalls.count { it.isError } }
+    val conversationTail: Any? = readableMessages.lastOrNull()?.let { Triple(it.seq, it.text.length, it.images.size) }
     LaunchedEffect(conversationTail, ui.viewMode) {
         if (ui.viewMode != SessionViewMode.CONVERSATION || conversationTail == null) return@LaunchedEffect
         // 用户上翻历史 / 正在取更早：绝不抢滚动，改用右下角「回到最新」
         if (!atBottom || ui.loadingOlder) return@LaunchedEffect
-        runCatching { listState.animateScrollToItem(ui.messages.size) }
+        runCatching { listState.animateScrollToItem(readableMessages.size) }
     }
 
     // 上拉到顶自动取更早一页：判定与轨迹视图共用（TrajectoryList.kt 的 LoadOlderOnReachTop），
@@ -294,7 +304,7 @@ fun SessionDetailScreen(
     // 消费「回到最新」一次性信号：tick 每次点击 +1，首次组合时是 0（不该抢滚动）。
     LaunchedEffect(ui.scrollToNewestTick) {
         if (ui.scrollToNewestTick <= 0) return@LaunchedEffect
-        val lastIndex = if (ui.viewMode == SessionViewMode.TRAJECTORY) ui.trajectory.size else ui.messages.size
+        val lastIndex = if (ui.viewMode == SessionViewMode.TRAJECTORY) ui.trajectory.size else readableMessages.size
         runCatching { listState.animateScrollToItem(lastIndex) }
     }
 
@@ -306,7 +316,7 @@ fun SessionDetailScreen(
         // 跳到某一轮 = 主动离开最新那条：把闸门打开，让贴底判定在动画停下后自己收敛，
         // 否则"用户正在往回看"与"界面以为仍在底部"会同时成立（右下角不出现「回到最新」）。
         userScrolled = true
-        val index = ui.messages.indexOfFirst { it.seq == target }
+        val index = conversationTargetIndex(readableMessages, ui.messages, target)
         if (index >= 0) {
             runCatching { listState.animateScrollToItem(index + 1) }
             atBottom = false
@@ -318,7 +328,7 @@ fun SessionDetailScreen(
     // 与 ui.message 那套分开，是因为它不是错误、也不需要常驻，展示完就消费。
     LaunchedEffect(ui.jumpNote) {
         val note = ui.jumpNote ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(note)
+        snackbarHostState.showMessage(note)
         viewModel.consumeJumpNote()
     }
 
@@ -350,7 +360,7 @@ fun SessionDetailScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { DshSnackbarHost(snackbarHostState) },
         containerColor = DetailBackground,
     ) { _ ->
         // 不用 Scaffold 的 innerPadding：它把顶部状态栏和底部手势条一起算进来，
@@ -476,7 +486,7 @@ fun SessionDetailScreen(
                             // 协议没有导出接口，落点是系统剪贴板：写文件会让用户以为存到电脑上了
                             copyToClipboard(context, trajectoryExportText(visibleRows, totalTurns))
                             scope.launch {
-                                snackbarHostState.showSnackbar("已复制 ${visibleRows.size} 步轨迹到剪贴板")
+                                snackbarHostState.showMessage("已复制 ${visibleRows.size} 步轨迹到剪贴板")
                             }
                         },
                     )
@@ -572,6 +582,21 @@ fun SessionDetailScreen(
                 }
             }
 
+            if (conversationSelected && hiddenToolCount > 0) {
+                DetailNoteRow(
+                    text = "已收起 $hiddenToolCount 次工具调用" +
+                        if (failedToolCount > 0) " · $failedToolCount 次异常" else "",
+                    tone = if (failedToolCount > 0) DshWarning else DshOnSurfaceVariant,
+                    icon = Icons.Default.Info,
+                    action = "查看轨迹",
+                    onAction = {
+                        savedViewMode = SessionViewMode.TRAJECTORY
+                        viewModel.switchView(SessionViewMode.TRAJECTORY)
+                    },
+                    modifier = Modifier.padding(horizontal = dimens.pageMargin, vertical = 4.dp),
+                )
+            }
+
             // 内容区：FAB 叠在两种视图之上，因为"回到最新"对它们都成立
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (conversationSelected) {
@@ -607,12 +632,11 @@ fun SessionDetailScreen(
                                     noun = "消息",
                                 )
                             }
-                            // 不设 key：本地乐观插入的用户消息与服务端消息可能撞 seq，
-                            // 重复 key 会让 LazyColumn 直接抛异常，这里用下标更稳。
-                            itemsIndexed(ui.messages) { index, message ->
+                            itemsIndexed(readableMessages, key = { index, _ -> messageKeys[index] }) { index, message ->
                                 MessageItem(
                                     message = message,
-                                    streaming = ui.streaming && index == ui.messages.lastIndex,
+                                    workspace = ui.session?.workspace.orEmpty(),
+                                    streaming = ui.streaming && index == readableMessages.lastIndex,
                                     expandedTools = ui.expandedTools,
                                     onToggleTool = viewModel::toggleTool,
                                     onOpenDeliverable = { deliverable ->
@@ -710,7 +734,7 @@ fun SessionDetailScreen(
                     onInputChange = viewModel::onInputChange,
                     onSend = viewModel::send,
                     onPermissionClick = viewModel::openPermissionSheet,
-                    onNotice = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
+                    onNotice = { message -> scope.launch { snackbarHostState.showMessage(message) } },
                     onPickGallery = { imagePicker.pickFromGallery() },
                     onTakePhoto = { imagePicker.takePhoto() },
                     onRemoveImage = viewModel::removeImage,
@@ -1178,6 +1202,7 @@ private fun LazyListState.isNearBottom(): Boolean {
 @Composable
 private fun MessageItem(
     message: ChatMessage,
+    workspace: String,
     streaming: Boolean,
     expandedTools: Set<String>,
     onToggleTool: (String) -> Unit,
@@ -1200,39 +1225,50 @@ private fun MessageItem(
                 },
             ),
     ) {
-        when {
-            message.isUser -> UserBubble(
-                text = message.text,
-                at = message.at,
-                images = message.images,
-                loader = loader,
-                onOpenImage = onOpenImage,
-            )
-
-            message.role == "system" -> DshCard(containerColor = DshSurfaceVariant) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    Text(
-                        text = "系统",
-                        style = LocalDshType.current.meta.copy(fontWeight = FontWeight.Bold),
-                        color = DshOnSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
+        CompositionLocalProvider(LocalMarkdownImages provides MarkdownImages(workspace, loader, onOpenImage)) {
+            SelectionContainer {
+                when {
+                    message.todos.isNotEmpty() && message.text.isBlank() -> TodoListCard(message.todos)
+                    message.isUser -> UserBubble(
                         text = message.text,
-                        style = LocalDshType.current.body,
-                        color = DshOnBackground,
+                        at = message.at,
+                        images = message.images,
+                        loader = loader,
+                        onOpenImage = onOpenImage,
+                    )
+
+                    message.role == "system" -> DshCard(containerColor = DshSurfaceVariant) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                            Text(
+                                text = "系统",
+                                style = LocalDshType.current.meta.copy(fontWeight = FontWeight.Bold),
+                                color = DshOnSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = message.text,
+                                style = LocalDshType.current.body,
+                                color = DshOnBackground,
+                            )
+                        }
+                    }
+
+                    else -> AssistantMessage(
+                        message = message,
+                        expandedTools = expandedTools,
+                        onToggleTool = onToggleTool,
+                        onOpenDeliverable = onOpenDeliverable,
+                        streaming = streaming,
+                        loader = loader,
+                        onOpenImage = onOpenImage,
                     )
                 }
             }
-
-            else -> AssistantMessage(
-                message = message,
-                expandedTools = expandedTools,
-                onToggleTool = onToggleTool,
-                onOpenDeliverable = onOpenDeliverable,
-                streaming = streaming,
-                loader = loader,
-                onOpenImage = onOpenImage,
+        }
+        if (message.text.isNotBlank()) {
+            MessageCopyButton(
+                text = message.text,
+                modifier = Modifier.align(if (message.isUser) Alignment.End else Alignment.Start),
             )
         }
     }

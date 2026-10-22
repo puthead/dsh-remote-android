@@ -75,8 +75,8 @@ android {
         //        通过桌面端 `/permission <preset>` 改电脑端同一会话（只读/仅工作区/全部权限，
         //        全部权限带二次风险确认），改完电脑端同一会话立即可见。
         //        versionCode 按开发规范 §8.1 每次交付 +1
-        versionCode = 13
-        versionName = "2.11.0"
+        versionCode = 17
+        versionName = "2.12.0"
         // 设置页展示的协议版本（与契约 §1 的 X-Api-Version 一致）
         buildConfigField("int", "API_VERSION", "2")
     }

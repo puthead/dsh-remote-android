@@ -129,7 +129,8 @@ class TranscriptPager(private val capacity: Int = DEFAULT_CAPACITY) {
         val loaded = serverCount()
         state = state.copy(
             nextCursor = pickNextCursor(page.nextCursor, page.cursorProvided, cursorPolicy),
-            total = maxOf(if (page.total > 0) page.total else loaded, window.size),
+            // 临时回声不占服务端消息条数，接管时也不能让总数凭空多一条。
+            total = maxOf(if (page.total > 0) page.total else loaded, loaded),
             loadedFrom = maxOf(0, loadedTo - loaded),
             loadedTo = loadedTo,
             // 计数只看窗口：推算值会虚高（见 TranscriptSync.loaded 的注释）
@@ -217,6 +218,12 @@ class TranscriptPager(private val capacity: Int = DEFAULT_CAPACITY) {
         val loaded = serverCount()
         state = state.copy(total = maxOf(state.total, loaded), loaded = loaded)
         return messages
+    }
+
+    /** 删除已由服务端接管的本地回声，不能只从仓库记账中删除。 */
+    fun removeLocal(message: ChatMessage) {
+        val key = syntheticKeys.remove(message) ?: return
+        if (localKeys.remove(key)) window.remove(key)
     }
 
     fun clear() {

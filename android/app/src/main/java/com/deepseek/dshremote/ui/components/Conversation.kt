@@ -3,6 +3,8 @@ package com.deepseek.dshremote.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +37,10 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.material.icons.filled.ContentCopy
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -104,9 +110,6 @@ private val CONTENT_WIDTH_MAX = 320.dp
 
 /** 用户气泡宽度上限（画稿 750px ÷ 3）。 */
 private val BUBBLE_WIDTH = 250.dp
-
-/** 思考折叠行高度（画稿 90px ÷ 3）。 */
-private val THINKING_ROW_HEIGHT = 30.dp
 
 /** 工具卡头部高度（画稿 102px ÷ 3）。 */
 private val TOOL_HEADER_HEIGHT = 34.dp
@@ -182,9 +185,7 @@ fun UserBubble(
 /**
  * 思考块折叠行（`思考 · 1.2s`）。
  *
- * 为什么做成公开组件而不是塞进 [AssistantMessage]：思考文本目前没有独立的数据字段
- * （`ChatMessage` 只有 text / toolCalls / deliverables / todos），
- * 由详情页决定何时展示这一行、展开后渲染什么；这里只负责画稿的那一条 30dp 行。
+ * 正文与 reasoning 分开显示，默认收起，展开状态跟随消息保存。
  */
 @Composable
 fun ThinkingRow(
@@ -197,7 +198,7 @@ fun ThinkingRow(
     Row(
         modifier = modifier
             .widthIn(max = CONTENT_WIDTH_MAX)
-            .height(THINKING_ROW_HEIGHT)
+            .heightIn(min = 44.dp)
             .clip(RoundedCornerShape(DshRadius.Sub))
             .background(DshSurfaceVariant)
             .border(LocalDshDimens.current.border, DshOutline, RoundedCornerShape(DshRadius.Sub))
@@ -424,6 +425,14 @@ fun AssistantMessage(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (message.reasoning.isNotBlank()) {
+            var expanded by rememberSaveable(message.role, message.at) { mutableStateOf(false) }
+            ThinkingRow("思考过程", expanded, { expanded = !expanded })
+            if (expanded) MarkdownText(
+                text = message.reasoning, textStyle = type.body,
+                color = DshOnSurfaceVariant, modifier = Modifier.fillMaxWidth(),
+            )
+        }
         if (message.text.isNotEmpty()) {
             // 模型输出几乎总是 Markdown（标题/列表/代码块/表格），渲染成富文本比原样显示可读得多
             MarkdownText(
@@ -930,8 +939,7 @@ fun DeliverableCard(
 /**
  * 待办列表（从 todo/write 类工具调用的参数投影）。
  *
- * 高度 = 30dp 抬头的固定行 + 每项 20dp + 6dp 收尾，与画稿一致：
- * 任务清单是"一眼看进度"的组件，行距一旦变成 M3 默认的 8dp 间距就会松散成两倍高。
+ * 默认只显示标题和完成数，展开后显示完整清单，长任务名称允许换行。
  */
 @Composable
 fun TodoListCard(
@@ -939,6 +947,7 @@ fun TodoListCard(
     modifier: Modifier = Modifier,
 ) {
     if (todos.isEmpty()) return
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val dimens = LocalDshDimens.current
     val type = LocalDshType.current
     Column(
@@ -952,7 +961,8 @@ fun TodoListCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(30.dp)
+                .heightIn(min = 44.dp)
+                .clickable { expanded = !expanded }
                 .padding(start = 14.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -969,27 +979,33 @@ fun TodoListCard(
                 color = DshOnSurfaceVariant,
                 maxLines = 1,
             )
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "收起任务清单" else "展开任务清单",
+                tint = DshOnSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp).size(20.dp),
+            )
         }
-        todos.forEach { todo ->
-            val done = todo.done
-            val active = !done && isActiveStatus(todo.status)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(20.dp)
-                    .padding(start = 14.dp, end = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TodoMarker(done = done, active = active)
-                Text(
-                    text = todo.text,
-                    style = type.label,
-                    color = if (active) DshOnBackground else DshOnSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textDecoration = if (done) TextDecoration.LineThrough else TextDecoration.None,
-                    modifier = Modifier.padding(start = 8.dp).weight(1f),
-                )
+        if (expanded) Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+            todos.forEach { todo ->
+                val done = todo.done
+                val active = !done && isActiveStatus(todo.status)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 28.dp)
+                        .padding(start = 14.dp, end = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TodoMarker(done = done, active = active)
+                    Text(
+                        text = todo.text,
+                        style = type.label,
+                        color = if (active) DshOnBackground else DshOnSurfaceVariant,
+                        textDecoration = if (done) TextDecoration.LineThrough else TextDecoration.None,
+                        modifier = Modifier.padding(start = 8.dp).weight(1f),
+                    )
+                }
             }
         }
     }
@@ -1114,4 +1130,32 @@ private fun toolKind(name: String): ToolKind = when {
     name.contains("todo", true) || name.contains("plan", true) -> ToolKind.Plan
 
     else -> ToolKind.Other
+}
+
+/** Copies the original message, including Markdown and code, without tool output. */
+@Composable
+fun MessageCopyButton(text: String, modifier: Modifier = Modifier) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(text) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1800)
+            copied = false
+        }
+    }
+    Row(
+        modifier = modifier.clip(RoundedCornerShape(8.dp))
+            .clickable(role = androidx.compose.ui.semantics.Role.Button) {
+                clipboard.setText(AnnotatedString(text))
+                copied = true
+            }
+            .heightIn(min = 40.dp).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+            contentDescription = null, tint = DshOnSurfaceVariant, modifier = Modifier.size(14.dp))
+        Text(if (copied) "已复制" else "复制全文", style = LocalDshType.current.meta,
+            color = DshOnSurfaceVariant)
+    }
 }

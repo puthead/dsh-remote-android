@@ -858,9 +858,9 @@ export function translateDesktopEvent(value) {
       return { type: 'session.updated', data: { seq, step: data.step ?? null, usage: data.usage ?? null } };
     case 'assistant/message': {
       const { text, reasoning } = extractAssistantText(data);
-      if (reasoning) return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'reasoning', text: reasoning } };
+      if (reasoning && !text) return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'reasoning', text: reasoning } };
       if (!text) return null;
-      return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'text', text } };
+      return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'text', text, messageBoundary: true, ...(reasoning ? { reasoning } : {}) } };
     }
     case 'tool/call':
       return { type: 'tool.call', data: { seq, name: data.name ?? data.toolName ?? null, args: data.args ?? data.input ?? null, callId: data.callId ?? data.id ?? null } };

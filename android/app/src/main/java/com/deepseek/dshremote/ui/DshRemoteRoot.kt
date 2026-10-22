@@ -13,8 +13,8 @@ import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarHost
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -188,16 +188,16 @@ private fun Shell(
     onNoticeDismissed: () -> Unit,
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     LaunchedEffect(notice) {
         notice?.let {
-            snackbarHostState.showSnackbar(it)
+            snackbarHostState.showMessage(it)
             onNoticeDismissed()
         }
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { DshSnackbarHost(snackbarHostState) },
         bottomBar = {
             // 契约 §7.3：两类会话分开呈现 —— 电脑会话只读镜像 / 手机任务可续聊
             DshNavBar(

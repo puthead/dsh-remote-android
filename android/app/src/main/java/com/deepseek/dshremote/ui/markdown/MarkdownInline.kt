@@ -273,12 +273,30 @@ object MarkdownInline {
         }
         if (depth != 0 || i + 1 >= line.length || line[i + 1] != '(') return null
         var j = i + 2
+        while (j < line.length && line[j].isWhitespace()) j++
+        // 本地图片常含空格，用 <...> 包裹的目标必须整体读取，不能在首个空格截断。
+        if (j < line.length && line[j] == '<') {
+            val end = line.indexOf('>', j + 1)
+            if (end < 0) return null
+            val href = line.substring(j + 1, end)
+            if (href.isBlank() || href.contains('<')) return null
+            j = end + 1
+            while (j < line.length && line[j].isWhitespace()) j++
+            if (j < line.length && (line[j] == '"' || line[j] == '\'')) {
+                val titleEnd = line.indexOf(line[j], j + 1)
+                if (titleEnd < 0) return null
+                j = titleEnd + 1
+                while (j < line.length && line[j].isWhitespace()) j++
+            }
+            if (j >= line.length || line[j] != ')') return null
+            return RawLink(label.toString(), href, j + 1)
+        }
         val url = StringBuilder()
         var parens = 0
         var closed = false
         while (j < line.length) {
             val c = line[j]
-            if (c == '\\' && j + 1 < line.length) {
+            if (c == '\\' && j + 1 < line.length && line[j + 1] in ESCAPE_ALWAYS) {
                 url.append(line[j + 1])
                 j += 2
                 continue

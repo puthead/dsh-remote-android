@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import kotlinx.coroutines.CancellationException
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
@@ -29,8 +32,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarHost
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -104,7 +107,7 @@ fun WorkspaceScreen(
 ) {
     val viewModel = appViewModel { WorkspaceViewModel(Graph.repository) }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     var switcherOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(workspaceHint) { viewModel.bootstrap(workspaceHint) }
@@ -112,11 +115,11 @@ fun WorkspaceScreen(
     // 只消费非错误提示，错误原因要留在屏幕上（判据与完整理由见 MessageConsumption.kt）。
     LaunchedEffect(ui.message) {
         val shown = ui.message ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(shown)
+        snackbarHostState.showMessage(shown)
         if (shouldConsumeSnackbarMessage(ui.message, ui.isError)) viewModel.consumeMessage()
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+    Scaffold(snackbarHost = { DshSnackbarHost(snackbarHostState) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -139,7 +142,9 @@ fun WorkspaceScreen(
             )
 
             WorkspacePicker(
-                label = ui.absolutePath.ifEmpty { "未选择工作区" },
+                label = ui.workspaces.firstOrNull { it.path == ui.currentWorkspace }?.let { it.title?.takeIf(String::isNotBlank) ?: it.label }
+                    ?: ui.workspaceLabel,
+                path = ui.absolutePath.ifEmpty { "选择电脑上的项目目录" },
                 expanded = switcherOpen,
                 onExpandChange = { switcherOpen = it },
                 workspaces = ui.workspaces,
@@ -164,6 +169,8 @@ fun WorkspaceScreen(
                     entries = ui.entries,
                     truncated = ui.truncated,
                     dirError = ui.dirError,
+                    loading = ui.directoryLoading || ui.workspacesLoading,
+                    hasWorkspace = ui.currentWorkspace.isNotEmpty(),
                     onOpenFile = { path -> onOpenFile(ui.currentWorkspace, path) },
                 )
 
@@ -171,6 +178,9 @@ fun WorkspaceScreen(
                     viewModel = viewModel,
                     workspace = ui.currentWorkspace,
                     changes = ui.changes,
+                    error = ui.changesError,
+                    loading = ui.changesLoading,
+                    hasWorkspace = ui.currentWorkspace.isNotEmpty(),
                     onOpenDiff = { path -> onOpenDiff(ui.currentWorkspace, path) },
                 )
 
@@ -178,6 +188,9 @@ fun WorkspaceScreen(
                     viewModel = viewModel,
                     query = ui.searchQuery,
                     hits = ui.hits,
+                    searching = ui.searching,
+                    completed = ui.searchCompleted,
+                    error = ui.searchError,
                     onOpenHit = { path -> onOpenFile(ui.currentWorkspace, path) },
                 )
             }
@@ -189,6 +202,7 @@ fun WorkspaceScreen(
 @Composable
 private fun WorkspacePicker(
     label: String,
+    path: String,
     expanded: Boolean,
     onExpandChange: (Boolean) -> Unit,
     workspaces: List<WorkspaceSummary>,
@@ -201,13 +215,13 @@ private fun WorkspacePicker(
                 radius = DshRadius.Sub,
                 containerColor = DshSurfaceVariant,
                 borderColor = if (expanded) DshPrimary.copy(alpha = 0.55f) else DshOutline,
-                modifier = Modifier.fillMaxWidth().height(40.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
             ) {
                 Row(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .fillMaxWidth()
                         .clickable { onExpandChange(true) }
-                        .padding(start = 12.dp, end = 10.dp),
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // 画稿里这个图标是第二强调色（橙），不是灰 —— 它是"当前工作区"的第一标识
@@ -218,14 +232,13 @@ private fun WorkspacePicker(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = label,
-                        style = type.label.copy(fontFamily = FontFamily.Monospace),
-                        color = DshOnBackground,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text(label, style = type.cardTitle, color = DshOnBackground,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text(path, style = type.meta.copy(fontFamily = FontFamily.Monospace),
+                            color = DshOnSurfaceVariant, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    }
                     Spacer(Modifier.width(6.dp))
                     Icon(
                         imageVector = Icons.Default.ExpandMore,
@@ -300,6 +313,8 @@ private fun TabStrip(
                     contentColor = if (selected) DshPrimary else DshOnSurfaceVariant,
                     borderColor = if (selected) DshPrimary.copy(alpha = 0.45f) else DshOutline,
                     bold = selected,
+                    height = 40.dp,
+                    modifier = Modifier.weight(1f),
                     onClick = { onSelect(tab) },
                 )
             }
@@ -326,6 +341,8 @@ private fun ColumnScope.FilesTab(
     entries: List<com.deepseek.dshremote.data.api.WorkspaceEntry>,
     truncated: Boolean,
     dirError: String?,
+    loading: Boolean,
+    hasWorkspace: Boolean,
     onOpenFile: (String) -> Unit,
 ) {
     DshPageContainer { BreadcrumbBar(workspaceLabel, crumbs, viewModel::openDir) }
@@ -368,7 +385,7 @@ private fun ColumnScope.FilesTab(
                     )
                     Spacer(Modifier.height(12.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        DshButton("重试", viewModel::refresh, solid = true)
+                        DshButton("重试", viewModel::retryDirectory, solid = true)
                         Spacer(Modifier.width(8.dp))
                         DshButton("返回上级", viewModel::up, enabled = canGoUp)
                     }
@@ -378,7 +395,12 @@ private fun ColumnScope.FilesTab(
         return
     }
     if (entries.isEmpty()) {
-        EmptyHint("这个目录是空的（或未加载）。")
+        WorkspaceStateCard(
+            title = if (loading) "正在读取目录" else if (!hasWorkspace) "还没有工作区" else "这个文件夹是空的",
+            detail = if (loading) "正在从电脑获取文件列表…" else if (!hasWorkspace)
+                "在电脑端添加工作区，然后点击右上角刷新。" else "可以返回上级，或打开显示点文件查看隐藏内容。",
+            loading = loading,
+        )
         return
     }
     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -409,29 +431,42 @@ private fun ColumnScope.ChangesTab(
     viewModel: WorkspaceViewModel,
     workspace: String?,
     changes: com.deepseek.dshremote.data.api.ChangeSet?,
+    error: String?,
+    loading: Boolean,
+    hasWorkspace: Boolean,
     onOpenDiff: (String) -> Unit,
 ) {
     val set = changes
     if (set == null) {
-        EmptyHint("正在加载改动…")
+        WorkspaceStateCard(
+            title = if (error != null) "改动加载失败" else if (loading) "正在读取改动" else "还没有工作区",
+            detail = error ?: if (hasWorkspace) "正在获取电脑上的 Git 状态…" else "请先选择工作区。",
+            loading = loading,
+            retry = if (error != null) viewModel::loadChanges else null,
+        )
         return
     }
 
     val total = set.changed.size + set.untracked.size
     val modified = set.changed.count { it.status.uppercase() == "M" }
-    val added = set.changed.count { it.status.uppercase() == "A" } + set.untracked.size
+    val added = set.changed.count { it.status.uppercase() == "A" }
     val removed = set.changed.count { it.status.uppercase() == "D" }
     val untracked = set.untracked.size
     val previewPath = set.changed.firstOrNull()?.path ?: set.untracked.firstOrNull()
 
     // 预览 diff 只取"足够说明改动"的片段：一次网络请求换来首页的一眼可见
-    val preview: List<String>? by produceState<List<String>?>(initialValue = null, workspace, previewPath) {
+    val preview: Result<List<String>>? by produceState<Result<List<String>>?>(initialValue = null, workspace, previewPath, changes) {
         value = null
         val ws = workspace
         val path = previewPath
         if (ws == null || path == null) return@produceState
-        value = runCatching { Graph.repository.loadDiff(ws, path) }
-            .fold(onSuccess = { it.getOrNull()?.lines }, onFailure = { null })
+        value = try {
+            Graph.repository.loadDiff(ws, path).map { it.lines }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
     }
 
     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -503,8 +538,9 @@ private fun ColumnScope.ChangesTab(
                 DshPageContainer {
                     DiffPreviewCard(
                         fileName = previewPath.replace('\\', '/').substringAfterLast('/'),
-                        lines = preview ?: emptyList(),
+                        lines = preview?.getOrNull().orEmpty(),
                         loading = preview == null,
+                        failed = preview?.isFailure == true,
                     )
                 }
             }
@@ -641,7 +677,7 @@ private fun RatioBar(modified: Int, added: Int, untracked: Int, modifier: Modifi
  * 只显示片段（每 hunk 的头部上下文 + 全部增删行，总行数封顶），点列表里的行才进完整 diff。
  */
 @Composable
-private fun DiffPreviewCard(fileName: String, lines: List<String>, loading: Boolean) {
+private fun DiffPreviewCard(fileName: String, lines: List<String>, loading: Boolean, failed: Boolean) {
     val type = LocalDshType.current
     val added = lines.count { it.startsWith("+") && !it.startsWith("+++") }
     val removed = lines.count { it.startsWith("-") && !it.startsWith("---") }
@@ -670,6 +706,11 @@ private fun DiffPreviewCard(fileName: String, lines: List<String>, loading: Bool
                 )
             }
             when {
+                failed -> Text(
+                    text = "预览加载失败，点击文件打开完整改动，或刷新后重试。",
+                    style = type.meta, color = DshError,
+                    modifier = Modifier.padding(14.dp),
+                )
                 loading -> Text(
                     text = "正在生成 diff…",
                     style = type.meta,
@@ -740,6 +781,9 @@ private fun ColumnScope.SearchTab(
     viewModel: WorkspaceViewModel,
     query: String,
     hits: List<com.deepseek.dshremote.data.api.SearchHit>,
+    searching: Boolean,
+    completed: Boolean,
+    error: String?,
     onOpenHit: (String) -> Unit,
 ) {
     DshPageContainer {
@@ -753,21 +797,58 @@ private fun ColumnScope.SearchTab(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
-            DshButton("搜索", viewModel::runSearch, solid = true)
+            DshButton("搜索", viewModel::runSearch, solid = true,
+                enabled = query.isNotBlank() && !searching, height = 44.dp)
         }
     }
     Spacer(Modifier.height(12.dp))
 
     if (hits.isEmpty()) {
-        EmptyHint("输入关键词后点「搜索」。搜索在 PC 上执行，只返回轻量结果。")
+        WorkspaceStateCard(
+            title = when {
+                searching -> "正在搜索"
+                error != null -> "搜索失败"
+                completed -> "没有匹配结果"
+                else -> "搜索这个工作区"
+            },
+            detail = error ?: when {
+                searching -> "正在电脑上查找文件名和内容…"
+                completed -> "试试更短的关键词，或检查是否选对工作区。"
+                else -> "输入文件名或代码片段，快速定位需要的文件。"
+            },
+            loading = searching,
+            retry = if (error != null) viewModel::runSearch else null,
+        )
         return
     }
     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-        items(hits, key = { it.path + (it.line?.toString() ?: "") }) { hit ->
+        itemsIndexed(hits, key = { index, hit -> "$index:${hit.path}:${hit.line}" }) { _, hit ->
             DshPageContainer {
                 SearchHitRow(hit = hit, onClick = { onOpenHit(hit.path) })
             }
             Hairline(inset = 34.dp)
+        }
+    }
+}
+
+/** Shared empty/error/loading panel with a visible recovery action. */
+@Composable
+private fun WorkspaceStateCard(
+    title: String,
+    detail: String,
+    loading: Boolean = false,
+    retry: (() -> Unit)? = null,
+) {
+    DshPageContainer {
+        DshCard(containerColor = DshSurface, borderColor = DshOutline.copy(alpha = 0.7f)) {
+            Column(Modifier.fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (loading) CircularProgressIndicator(Modifier.size(24.dp), color = DshPrimary, strokeWidth = 2.dp)
+                else Icon(Icons.Default.FolderOpen, null, tint = DshPrimary, modifier = Modifier.size(28.dp))
+                Text(title, style = LocalDshType.current.cardTitle, color = DshOnBackground)
+                Text(detail, style = LocalDshType.current.body, color = DshOnSurfaceVariant)
+                if (retry != null) DshButton("重试", retry, solid = true, height = 44.dp)
+            }
         }
     }
 }

@@ -39,8 +39,8 @@ import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarHost
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -108,7 +108,7 @@ fun SettingsScreen() {
     val viewModel = appViewModel { SettingsViewModel(Graph.repository, Graph.appContext) }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val relayState by viewModel.relayState.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     val focusManager = LocalFocusManager.current
     // 中继地址/设备名与配对码是"行内展开编辑器"：行本身保持 44dp 的紧凑卡面，
     // 需要改的时候才展开输入框，避免设置页被两个 TextField 撑长
@@ -126,7 +126,7 @@ fun SettingsScreen() {
     // 注意本页与配对页共用同一个 SettingsViewModel 实例，消费对两页同时生效。
     LaunchedEffect(ui.message) {
         val shown = ui.message ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(shown)
+        snackbarHostState.showMessage(shown)
         if (shouldConsumeSnackbarMessage(ui.message, ui.isError)) viewModel.consumeMessage()
     }
 
@@ -139,7 +139,7 @@ fun SettingsScreen() {
         crashCount = loaded.second
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+    Scaffold(snackbarHost = { DshSnackbarHost(snackbarHostState) }) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()

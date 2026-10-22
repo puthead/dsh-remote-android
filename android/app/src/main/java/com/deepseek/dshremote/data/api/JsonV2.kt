@@ -200,6 +200,7 @@ object JsonV2 {
             truncated = obj.optBoolean("truncated", false),
             images = parseImages(obj.optJSONArray("images")),
             turn = obj.optIntOrNull("turn"),
+            reasoning = obj.optStringOrNull("reasoning").orEmpty(),
         )
     }
 
@@ -750,6 +751,12 @@ object JsonV2 {
                 put("role", message.role)
                 put("at", message.at)
                 put("text", message.text)
+                put("reasoning", message.reasoning)
+                put("todos", JSONArray().apply {
+                    message.todos.forEach { todo ->
+                        put(JSONObject().put("content", todo.text).put("status", todo.status))
+                    }
+                })
                 put("truncated", message.truncated)
                 // 轮次号与图片引用必须一起落盘：漏掉它们时，离线重开一个会话会看到
                 // "图片气泡只剩空气壳、轮次导航没有锚点"——而在线时一切正常，
