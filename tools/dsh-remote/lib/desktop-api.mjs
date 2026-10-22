@@ -38,8 +38,15 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { discoverDesktopHostPorts } from './desktop-discovery.mjs';
 
-/** 桌面端 Web 运行时的默认端口（桌面端固定用它；`--port 0` 的独立实例不适用）。 */
+/**
+ * 桌面端 Web 运行时的**旧版默认端口**。
+ *
+ * 0.2.0 起桌面端 Host 由 Electron 用 `--port 0` 启动，真实端口由操作系统分配
+ * （本机实测 55941）。这个常量现在只是 `desktop.port` 的默认提示值；连不上时
+ * `DesktopApi.ensurePort()` 会用 `desktop-discovery.mjs` 自动发现随机端口。
+ */
 export const DEFAULT_DESKTOP_PORT = 19387;
 
 /**
@@ -171,6 +178,9 @@ export class DesktopApi {
    *   existsImpl?: Function,
    *   homedirImpl?: () => string,
    *   discoverHome?: string|null,   // 凭据自动发现的目标 home（默认 `~/.dsh`；null = 关闭发现）
+   *   autoDiscover?: boolean,       // 配置端口不可用时自动发现桌面端 Host 的随机端口（默认 false）
+   *   discoverPorts?: Function,     // 端口发现实现（测试注入；默认见 desktop-discovery.mjs）
+   *   discoverTimeoutMs?: number,   // 单个候选端口的探测/发现超时
    * }} [opts]
    */
   constructor({
@@ -187,13 +197,31 @@ export class DesktopApi {
     existsImpl = existsSync,
     homedirImpl = homedir,
     discoverHome = undefined,
+    autoDiscover = false,
+    discoverPorts = discoverDesktopHostPorts,
+    discoverTimeoutMs = 5_000,
   } = {}) {
     this.dshHome = dshHome ?? join(homedirImpl(), '.dsh');
     this.host = host;
-    this.port = port;
-    this.authority = `${host}:${port}`;
-    this.baseUrl = `http://${host}:${port}`;
-    this.streamUrl = `ws://${host}:${port}/api/remote.mux`;
+    this.autoDiscover = autoDiscover;
+    this.discoverPorts = discoverPorts;
+    this.discoverTimeoutMs = discoverTimeoutMs;
+    /** 当前端口是否已经过探测确认（true 时不再每个请求都重新发现）。 */
+    this.portLocked = false;
+    /** 并发请求共用的发现 Promise，防止一次重连打出 N 次进程扫描。 */
+    this.portPromise = null;
+    /** 最近一次发现的诊断信息（`configured` / 候选 / 命中端口）。 */
+    this.discovery = null;
+    /** 当前端口的权威字符串；`setPort()` 会同步重建 baseUrl/streamUrl。 */
+    this.port = 0;
+    this.authority = '';
+    this.baseUrl = '';
+    this.streamUrl = '';
+    /** authority → cookie（不同候选端口的 cookie 名字/签名不同）。 */
+    this.cookieCache = new Map();
+    this.setPort(port);
+    /** 构造时的端口（显式配置或默认值），诊断时用于区分“配置命中”与“自动发现”。 */
+    this.configuredPort = port;
     this.logger = logger;
     this.now = now;
     this.fetchImpl = typeof fetchImpl === 'function' ? fetchImpl : globalThis.fetch;
@@ -216,8 +244,23 @@ export class DesktopApi {
     this.credentialsError = null;
     /** 是否走了凭据发现（诊断用：`true` 表示显式 home 里没有凭据）。 */
     this.credentialsDiscovered = false;
-    /** 缓存的 cookie（签名无状态，可复用；过期前刷新）。 */
-    this.cookieCache = null;
+  }
+
+  /**
+   * 切换当前端口，并同步重建依赖 authority 的 URL/缓存。
+   *
+   * 为什么把这件事收成一个方法：cookie 的**名字**是 `sha256(authority)`，签名 body 里
+   * 也逐字含 authority —— 端口一变，旧 cookie 一定失效。任何直接写 `this.port` 的地方
+   * 都会漏掉这两个派生值，最终表现为"端口发现了，但请求一直 401"。
+   *
+   * @param {number} port
+   */
+  setPort(port) {
+    this.port = Number(port);
+    this.authority = `${this.host}:${this.port}`;
+    this.baseUrl = `http://${this.host}:${this.port}`;
+    this.streamUrl = `ws://${this.host}:${this.port}/api/remote.mux`;
+    this.cookieCache.clear();
   }
 
   /** 凭据文件路径（`$DSH_HOME/.credentials.yaml`）。 */
@@ -286,16 +329,24 @@ export class DesktopApi {
     return false;
   }
 
-  /** 当前有效的 cookie 头（必要时刷新）。 */
-  cookieHeader() {
+  /**
+   * 当前有效的 cookie 头（必要时刷新）。
+   *
+   * 按 authority 缓存：自动发现阶段会依次探测多个端口，每个端口的 cookie 名字
+   * （`sha256(authority)` 的 base64url）都不同，共用一个缓存必然 401。
+   *
+   * @param {string} [authority]
+   */
+  cookieHeader(authority = this.authority) {
     const now = this.now();
-    if (this.cookieCache && this.cookieCache.expiresAt - 60_000 > now) return this.cookieCache.header;
+    const cached = this.cookieCache.get(authority);
+    if (cached && cached.expiresAt - 60_000 > now) return cached.header;
     if (!this.credentials && !this.loadCredentials()) {
       throw new DesktopApiError('desktop_unavailable', this.credentialsError ?? '桌面端凭据不可用');
     }
-    const built = buildAuthCookie({ secret: this.credentials.secret, authority: this.authority, now });
+    const built = buildAuthCookie({ secret: this.credentials.secret, authority, now });
     // body 里的 expiresAt 就是 now + 24h，这里同步记录，避免重复解析。
-    this.cookieCache = { header: built.header, name: built.name, value: built.value, expiresAt: now + 86_400_000 };
+    this.cookieCache.set(authority, { header: built.header, name: built.name, value: built.value, expiresAt: now + 86_400_000 });
     return built.header;
   }
 
@@ -307,6 +358,95 @@ export class DesktopApi {
       'content-type': 'application/json',
       accept: 'application/json',
     };
+  }
+
+  /**
+   * 确保当前端口可用；`autoDiscover` 打开时，配置端口连不上就自动找桌面端 Host
+   * 真正监听的随机端口。
+   *
+   * 只发现一次：探测成功后 `portLocked=true`，后续请求直接用缓存端口；请求层观察到
+   * 连接被拒/401 时会把锁清掉，下一次调用重新发现（桌面端重启后端口会变）。
+   *
+   * @param {{force?: boolean}} [opts]
+   */
+  async ensurePort({ force = false } = {}) {
+    if (!this.autoDiscover) return;
+    if (this.portLocked && !force) return;
+    if (this.portPromise) return this.portPromise;
+    this.portPromise = this.discoverPortOnce({ force })
+      .finally(() => {
+        this.portPromise = null;
+      });
+    return this.portPromise;
+  }
+
+  /**
+   * 发现一次：先试配置端口（兼容老版本固定 19387 / 用户显式指定），再试从进程
+   * 监听表里拿到的候选端口。每个候选都用真实签名 cookie 打一发极小 RPC 才算数。
+   *
+   * @param {{force?: boolean}} [opts]
+   */
+  async discoverPortOnce() {
+    const configured = this.port > 0 ? this.port : null;
+    const attempts = [];
+    // 1) 显式/默认端口优先：老版本桌面端与测试桩都固定一个端口，能连上就不做进程扫描。
+    if (configured !== null) {
+      attempts.push(configured);
+      if (await this.probePort(configured)) {
+        this.portLocked = true;
+        this.discovery = { port: configured, configured, candidates: [configured], discoveredAt: this.now(), error: null };
+        return;
+      }
+    }
+    // 2) 新版本桌面端用 --port 0，端口只存在于进程监听表里。
+    let discoveryError = null;
+    const candidates = configured === null ? [] : [configured];
+    try {
+      const discovered = await this.discoverPorts({ timeoutMs: this.discoverTimeoutMs });
+      for (const port of Array.isArray(discovered) ? discovered : []) {
+        const value = Number(port);
+        if (Number.isInteger(value) && value > 0 && value <= 65_535 && !candidates.includes(value)) candidates.push(value);
+      }
+    } catch (err) {
+      discoveryError = String(err?.message ?? err);
+    }
+    for (const port of candidates) {
+      if (attempts.includes(port)) continue;
+      attempts.push(port);
+      if (await this.probePort(port)) {
+        this.setPort(port);
+        this.portLocked = true;
+        this.discovery = { port, configured, candidates, discoveredAt: this.now(), error: null };
+        if (configured !== null) {
+          this.logger?.info?.(`桌面端 runtime 端口自动发现：${port}（配置/默认 ${configured} 不可达）`);
+        }
+        return;
+      }
+    }
+    this.portLocked = false;
+    this.discovery = { port: null, configured, candidates, discoveredAt: this.now(), error: discoveryError };
+    const tried = attempts.length > 0 ? attempts.join(', ') : '(没有发现任何候选端口)';
+    const suffix = discoveryError ? `；端口发现失败：${discoveryError}` : '';
+    throw new DesktopApiError(
+      'desktop_unreachable',
+      `连不上桌面端 runtime：已尝试端口 ${tried}${suffix}。请确认 DSH 桌面端正在运行；若它用固定端口，可在网关配置里显式设置 desktop.port`,
+    );
+  }
+
+  /**
+   * 探测一个候选端口是不是可用的桌面端 API。
+   *
+   * 用 `session/projections`（只读、请求/响应都很小）而不是 `session/list`：
+   * 后者会把全部会话与投影拖回来，仅为了发现端口不值得。判定标准是**请求层成功**
+   * （鉴权通过且拿到 result 信封），业务层返回错误也算端口正确。
+   *
+   * @param {number} port
+   * @returns {Promise<boolean>}
+   */
+  async probePort(port) {
+    const sessionId = 'session-00000000-0000-4000-8000-000000000000';
+    const outcome = await this.requestOnPort(port, 'session/projections', { request: { sessionId } }, { timeoutMs: this.discoverTimeoutMs });
+    return outcome.ok || outcome.reachable === true;
   }
 
   /**
@@ -325,17 +465,37 @@ export class DesktopApi {
 
   /**
    * 单次 RPC，**不抛错**，返回判别联合（供需要区分「桌面端不可达」与「业务拒绝」的调用方）。
-   * @returns {Promise<{ok: true, value: any} | {ok: false, error: {code: string, message: string}}>}
+   * @returns {Promise<{ok: true, value: any} | {ok: false, error: {code: string, message: string}, reachable?: boolean}>}
    */
   async callRaw(endpoint, args = {}, { timeoutMs = this.rpcTimeoutMs, signal = null } = {}) {
     if (typeof this.fetchImpl !== 'function') {
       return { ok: false, error: { code: 'desktop_unavailable', message: '运行环境没有 fetch（需要 Node 18+）' } };
     }
+    try {
+      await this.ensurePort();
+    } catch (err) {
+      return { ok: false, error: { code: err.code ?? 'desktop_unreachable', message: String(err.message ?? err) } };
+    }
+    return this.requestOnPort(this.port, endpoint, args, { timeoutMs, signal });
+  }
+
+  /**
+   * 在指定端口上发一次 RPC（发现阶段也用），不触发发现，避免递归。
+   *
+   * @param {number} port
+   * @param {string} endpoint
+   * @param {object} args
+   * @param {{timeoutMs?: number, signal?: AbortSignal|null}} [opts]
+   * @returns {Promise<{ok: true, value: any, reachable: true} | {ok: false, error: {code: string, message: string}, reachable: boolean}>}
+   */
+  async requestOnPort(port, endpoint, args = {}, { timeoutMs = this.rpcTimeoutMs, signal = null } = {}) {
+    const authority = `${this.host}:${port}`;
+    const baseUrl = `http://${this.host}:${port}`;
     let headers;
     try {
-      headers = this.headers();
+      headers = { host: authority, cookie: this.cookieHeader(authority), 'content-type': 'application/json', accept: 'application/json' };
     } catch (err) {
-      return { ok: false, error: { code: err.code ?? 'desktop_unavailable', message: String(err.message ?? err) } };
+      return { ok: false, reachable: false, error: { code: err.code ?? 'desktop_unavailable', message: String(err.message ?? err) } };
     }
     const rpcId = randomUUID();
     const body = JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args } });
@@ -344,35 +504,38 @@ export class DesktopApi {
     const onAbort = () => controller.abort(signal?.reason);
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      const res = await this.fetchImpl(`${this.baseUrl}/api/${endpoint}`, { method: 'POST', headers, body, signal: controller.signal });
+      const res = await this.fetchImpl(`${baseUrl}/api/${endpoint}`, { method: 'POST', headers, body, signal: controller.signal });
       if (res.status === 401 || res.status === 403) {
         // 401 = cookie 不被接受（secret 轮换 / Host 不对）；403 = trust fence 拒绝。
-        this.cookieCache = null;
-        return { ok: false, error: { code: 'desktop_unauthorized', message: `桌面端拒绝该请求（HTTP ${res.status}）：${this.baseUrl}/api/${endpoint}` } };
+        this.cookieCache.delete(authority);
+        // 这个端口可能是错的（比如旧配置端口上恰好有别的服务）：允许下一次请求重新发现。
+        if (port === this.port) this.portLocked = false;
+        return { ok: false, reachable: false, error: { code: 'desktop_unauthorized', message: `桌面端拒绝该请求（HTTP ${res.status}）：${baseUrl}/api/${endpoint}` } };
       }
       if (res.status === 404) {
-        return { ok: false, error: { code: 'desktop_no_route', message: `桌面端没有该接口：${endpoint}` } };
+        return { ok: false, reachable: false, error: { code: 'desktop_no_route', message: `桌面端没有该接口：${endpoint}` } };
       }
       const text = await res.text();
       let parsed;
       try {
         parsed = JSON.parse(text);
       } catch {
-        return { ok: false, error: { code: 'transport_failure', message: `桌面端响应不是 JSON（HTTP ${res.status}）：${text.slice(0, 200)}` } };
+        return { ok: false, reachable: false, error: { code: 'transport_failure', message: `桌面端响应不是 JSON（HTTP ${res.status}）：${text.slice(0, 200)}` } };
       }
       if (!parsed || typeof parsed !== 'object' || !parsed.result) {
-        return { ok: false, error: { code: 'transport_failure', message: `桌面端响应缺少 result 信封：${text.slice(0, 200)}` } };
+        return { ok: false, reachable: false, error: { code: 'transport_failure', message: `桌面端响应缺少 result 信封：${text.slice(0, 200)}` } };
       }
-      if (parsed.result.ok) return { ok: true, value: parsed.result.value };
+      if (parsed.result.ok) return { ok: true, reachable: true, value: parsed.result.value };
       const error = parsed.result.error ?? {};
-      return { ok: false, error: { code: String(error.code ?? 'desktop_error'), message: String(error.message ?? '桌面端返回未知错误') } };
+      return { ok: false, reachable: true, error: { code: String(error.code ?? 'desktop_error'), message: String(error.message ?? '桌面端返回未知错误') } };
     } catch (err) {
       const aborted = controller.signal.aborted;
       const code = aborted ? (signal?.aborted ? 'aborted' : 'timeout') : 'desktop_unreachable';
       const message = aborted
         ? `${endpoint} 超时（${timeoutMs}ms）或已取消`
-        : `无法连接桌面端 runtime（${this.baseUrl}）：${String(err?.message ?? err)}`;
-      return { ok: false, error: { code, message } };
+        : `无法连接桌面端 runtime（${baseUrl}）：${String(err?.message ?? err)}`;
+      if (port === this.port) this.portLocked = false;
+      return { ok: false, reachable: false, error: { code, message } };
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
@@ -494,6 +657,37 @@ export class DesktopApi {
     return this.call('session/selectModel', { request });
   }
 
+  // ---- 人类命令（手机端改会话权限的唯一入口） ----
+
+  /**
+   * `commands/execute`：在指定会话上执行一条**斜杠命令**，不发给模型。
+   *
+   * 权限档的写入路径是桌面端的 `/permission <preset>` 命令（`dsh-permission-presets`
+   * 注册的 host command）——它会把 `permission/preset` + `sandbox/mode` + `approval/policy`
+   * 写进该会话的日志，下一次工具调用立即按新档位执行。没有一元 setter：
+   * 桌面端自己的 UI 也是发这条命令（`PermissionSelect` → `command('/permission …')`）。
+   *
+   * 参数名必须与桌面端 Remote 描述符**逐字一致**：`agentId` / `line` /
+   * `submittedAttachments`。最后一项在新版是必填（缺了会得到
+   * `gateway/arguments-invalid: missing "submittedAttachments"`），旧版不认识它，
+   * 所以这里带空数组并在遇到"未知字段"时降级重试一次。
+   *
+   * @param {string} agentId 桌面端会话 id
+   * @param {string} line 完整命令（含前导 `/`），例如 `/permission danger-full-access`
+   * @returns {Promise<{commandId: string, result: {kind: 'success'|'error', text?: string}}>}
+   */
+  async executeCommand(agentId, line) {
+    const first = await this.callRaw('commands/execute', { agentId, line, submittedAttachments: [] });
+    if (first.ok) return assertCommandSucceeded(first.value);
+    if (isArgumentsInvalidFor(first.error, 'submittedAttachments')) {
+      // 兼容旧桌面端：描述符里没有这个参数时，少传一个键即可。
+      const second = await this.callRaw('commands/execute', { agentId, line });
+      if (second.ok) return assertCommandSucceeded(second.value);
+      throw new DesktopApiError(second.error.code, second.error.message);
+    }
+    throw new DesktopApiError(first.error.code, first.error.message);
+  }
+
   // ---- 工作区 ----
 
   /** `workspace/create`：把一个已存在目录登记为工作区（幂等）。 */
@@ -527,6 +721,11 @@ export class DesktopApi {
     const WebSocketImpl = this.webSocketImpl ?? defaultWebSocket();
     if (typeof WebSocketImpl !== 'function') {
       return { ended: false, error: { code: 'desktop_unavailable', message: '运行环境没有 WebSocket（需要 Node 22+）' } };
+    }
+    try {
+      await this.ensurePort();
+    } catch (err) {
+      return { ended: false, error: { code: err.code ?? 'desktop_unreachable', message: String(err.message ?? err) } };
     }
     let headers;
     try {
@@ -659,9 +858,9 @@ export function translateDesktopEvent(value) {
       return { type: 'session.updated', data: { seq, step: data.step ?? null, usage: data.usage ?? null } };
     case 'assistant/message': {
       const { text, reasoning } = extractAssistantText(data);
-      if (reasoning) return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'reasoning', text: reasoning } };
+      if (reasoning && !text) return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'reasoning', text: reasoning } };
       if (!text) return null;
-      return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'text', text } };
+      return { type: 'message.delta', data: { seq, role: 'assistant', channel: 'text', text, messageBoundary: true, ...(reasoning ? { reasoning } : {}) } };
     }
     case 'tool/call':
       return { type: 'tool.call', data: { seq, name: data.name ?? data.toolName ?? null, args: data.args ?? data.input ?? null, callId: data.callId ?? data.id ?? null } };
@@ -716,4 +915,43 @@ export function extractAssistantText(data) {
  */
 export function isDesktopSessionId(value) {
   return /^session-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(String(value ?? ''));
+}
+
+/**
+ * 把 `commands/execute` 的结果信封收口成可判定的成功/失败。
+ *
+ * 桌面端在"命令执行了但业务失败"（例如未知 preset）时仍然返回 `ok:true`，
+ * 成败在 `value.result.kind` 里。如果调用方只看 HTTP 层，就会把
+ * `unknown preset "full"` 当成"权限已修改"，这是本功能最不能接受的一种撒谎。
+ *
+ * @param {any} value
+ * @returns {{commandId: string, result: {kind: 'success'|'error', text?: string}}}
+ */
+function assertCommandSucceeded(value) {
+  if (!value || typeof value !== 'object') {
+    throw new DesktopApiError('desktop_error', '桌面端没有返回命令执行结果');
+  }
+  const result = value.result;
+  if (!result || (result.kind !== 'success' && result.kind !== 'error')) {
+    throw new DesktopApiError('desktop_error', `桌面端命令结果形状未知：${JSON.stringify(value).slice(0, 200)}`);
+  }
+  if (result.kind === 'error') {
+    throw new DesktopApiError('desktop_command_failed', String(result.text ?? '桌面端执行命令失败'));
+  }
+  return { commandId: String(value.commandId ?? ''), result };
+}
+
+/**
+ * 判断一个错误是不是"描述符不认这个参数名"。只用于 `submittedAttachments` 的版本兼容，
+ * 不拿它兜其它错误（否则真正的参数错会被静默重试成两次请求）。
+ *
+ * @param {{code?: string, message?: string}|null|undefined} error
+ * @param {string} field
+ */
+function isArgumentsInvalidFor(error, field) {
+  if (!error) return false;
+  const code = String(error.code ?? '');
+  const message = String(error.message ?? '');
+  if (!code.includes('arguments-invalid') && !message.includes('arguments-invalid')) return false;
+  return message.includes(field);
 }

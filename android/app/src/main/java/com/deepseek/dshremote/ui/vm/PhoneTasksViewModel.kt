@@ -275,18 +275,26 @@ class PhoneTasksViewModel(private val repository: ConsoleRepository) : ViewModel
                         if (outcome.sessionId.isEmpty()) {
                             _ui.update { it.copy(message = "任务已提交，但没有拿到会话 id，请下拉刷新列表", isError = true) }
                         } else {
-                            // 网关回执说"模型没生效"时必须把它摆在导航之前：任务照跑（这是
-                            // 软失败，不是创建失败），但界面不能继续显示用户选的那个模型。
-                            val notApplied = outcome.modelWarning?.takeIf { it.isNotBlank() }
+                            // 网关回执说"模型/权限没生效"时必须把它们摆在导航之前：任务照跑
+                            // （这是软失败，不是创建失败），但界面不能继续显示用户选的那个设置。
+                            // 两条原因可以同时出现（比如电脑端权限命令和模型切换都失败）。
+                            val modelWarning = outcome.modelWarning?.takeIf { it.isNotBlank() }
+                            val permissionWarning = outcome.permissionWarning?.takeIf { it.isNotBlank() }
+                            val warnings = buildList {
+                                if (modelWarning != null) add("你选的模型没有生效：$modelWarning（仍按执行端当前模型跑）")
+                                if (permissionWarning != null) add("权限没有切上：$permissionWarning（仍按电脑端原权限跑，可在对话里重试）")
+                            }
                             _ui.update {
                                 it.copy(
                                     newTaskPrompt = "",
                                     createdSessionId = outcome.sessionId,
-                                    createdNeedsAck = notApplied != null,
-                                    message = notApplied?.let { reason ->
-                                        "任务已创建，但你选的模型没有生效：$reason（仍按执行端当前模型跑）"
-                                    } ?: "任务已创建：${outcome.sessionId.take(24)}${outcome.placementNote()}",
-                                    isError = notApplied != null,
+                                    createdNeedsAck = warnings.isNotEmpty(),
+                                    message = if (warnings.isNotEmpty()) {
+                                        "任务已创建，但${warnings.joinToString("；")}"
+                                    } else {
+                                        "任务已创建：${outcome.sessionId.take(24)}${outcome.placementNote()}"
+                                    },
+                                    isError = warnings.isNotEmpty(),
                                 )
                             }
                         }

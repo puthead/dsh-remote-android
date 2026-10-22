@@ -16,6 +16,7 @@ import com.deepseek.dshremote.data.api.PendingImage
 import com.deepseek.dshremote.data.api.RelayHealth
 import com.deepseek.dshremote.data.api.RelayHttpClient
 import com.deepseek.dshremote.data.api.SearchHit
+import com.deepseek.dshremote.data.api.SessionPermission
 import com.deepseek.dshremote.data.api.SessionSummary
 import com.deepseek.dshremote.data.api.TaskAccess
 import com.deepseek.dshremote.data.api.TaskHost
@@ -549,6 +550,29 @@ class ConsoleRepository(
     }
 
     /**
+     * 改电脑端会话权限（契约 §7.9，v2.11.0）。
+     *
+     * 成功时把网关回执的 `permission` **立刻**写回本地会话列表：详情页的权限那行与
+     * 新建任务页都从同一份 `sessions` 读，等待下一次列表刷新会让用户看到"点完没反应"。
+     * 失败原样返回（含旧网关 404 / 电脑端离线），由 ViewModel 翻译成可读文案。
+     *
+     * 走 [tunnelTolerant]：这是用户主动点的一下，撞上重连窗口时值得等一次重试。
+     */
+    suspend fun setSessionPermission(sessionId: String, preset: String): Result<SessionPermission> = tunnelTolerant {
+        val permission = api.setSessionPermission(sessionId, preset)
+        var updated: List<SessionSummary>? = null
+        writeLock.withLock {
+            val next = _sessions.value.map {
+                if (it.id == sessionId) it.copy(permission = permission, updatedAt = now()) else it
+            }
+            _sessions.value = next
+            updated = next
+        }
+        updated?.let { cache.saveSessions(it) }
+        permission
+    }
+
+    /**
      * 新建手机任务（网关自有 DSH_HOME 的会话，契约 §7.2 的 SDK profile 驱动）。
      *
      * 端点：`POST /api/v2/tasks`（契约裁定：唯一新建入口），响应 202
@@ -770,6 +794,7 @@ class ConsoleRepository(
         val clientTexts = localClientTexts[sessionId]
         val stillLocal = localMessages.getOrPut(sessionId) { mutableListOf() }.filterNot { local ->
             page.messages.any { server -> isSameEcho(server, local, clientTexts?.get(local)) }
+                .also { adopted -> if (adopted) pager.removeLocal(local) }
         }
         localMessages[sessionId] = stillLocal.toMutableList()
         // 被服务端权威投影接管的那几条，连同"原话"一起清掉，别让两份记账各自漂移
@@ -1180,7 +1205,14 @@ class ConsoleRepository(
                 } else {
                     _sessions.value = _sessions.value.map {
                         if (it.id == event.sessionId) {
-                            it.copy(live = event.live, updatedAt = maxOf(it.updatedAt, event.updatedAt))
+                            it.copy(
+                                // 权限广播只带 `permission`（没有 live/updatedAt）：不能因为缺字段
+                                // 就把一个正在跑的会话在列表里"熄灭"（event.live 缺省 false）。
+                                live = if (event.permission != null && event.updatedAt == 0L) it.live else event.live,
+                                updatedAt = maxOf(it.updatedAt, event.updatedAt),
+                                // 权限事件可能来自另一台手机/网页：直接覆盖，别等下一次列表刷新。
+                                permission = event.permission ?: it.permission,
+                            )
                         } else {
                             it
                         }
@@ -1309,6 +1341,9 @@ class ConsoleRepository(
                 seq = event.seq,
                 role = event.role,
                 text = event.text,
+                channel = event.channel,
+                reasoning = event.reasoning,
+                messageBoundary = event.messageBoundary,
                 at = now(),
             )
             drafts + (event.sessionId to merged)
@@ -1433,7 +1468,7 @@ class ConsoleRepository(
          * 本地回声永不被摘除，每轮刷新又被 [ConsoleRepository.restoreLocalMessages] upsert 回窗口，
          * 屏幕上就是并排两条一模一样的用户气泡（纯文本回合文案相等，所以不中招 —— 与实测吻合）。
          *
-         *   对`（查看这张图片）`；原话是空串 ⇒ 有意不合并，本地那句 "1 张图片" 对用户更清楚。
+         * 纯图片回合按附件数与网关占位文本对齐，权威图片到达后删除本地占位气泡。
          *
          * 判据按"强度从高到低"三级，越靠前越不可能误判：
          *
@@ -1454,6 +1489,10 @@ class ConsoleRepository(
             if (kotlin.math.abs(server.at - local.at) >= LOCAL_ECHO_WINDOW_MS) return false
             if (server.text == local.text) return true
             if (clientText != null && clientText.isNotEmpty() && server.text == clientText) return true
+            if (clientText.isNullOrEmpty() && server.images.isNotEmpty() &&
+                local.text == echoText("", server.images.size) &&
+                (server.text.isEmpty() || server.text == "（查看这张图片）")
+            ) return true
             // 兜底：本地记账里没有这条的原话时（不该发生），仍然允许按 `[N 张图片]` 前缀剥壳比对。
             // 代价已明确：用户正文**恰好**以 `[N 张图片] ` 开头时，本地那条也会被摘掉，
             // 而服务端那条正文相同、图还在（信息不丢），最多差一个前缀。相比"漏合就永久多一条气泡"，

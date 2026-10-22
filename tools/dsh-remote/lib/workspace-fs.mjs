@@ -35,6 +35,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isWithin } from './workspace.mjs';
+import { ATTACHMENT_MAX_BYTES, sniffMediaType } from './attachments.mjs';
 
 /** 单目录条目上限（契约 §4.3：超出置 truncated）。 */
 export const MAX_ENTRIES = 2000;
@@ -365,6 +366,31 @@ export function looksBinary(buffer) {
  *
  * @param {{workspace: string, allowlist: string[], requestPath: string, fsImpl?: object, maxBytes?: number, encoding?: string}} opts
  */
+export async function readWorkspaceImage({ workspace, allowlist, requestPath, fsImpl = fs }) {
+  const target = await resolveTarget({ requestPath, workspace, allowlist, fsImpl, mustExist: true, expect: 'file', mode: READ_MODE });
+  const handle = await fsImpl.promises.open(target.lexicalPath, 'r');
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new WorkspaceError('bad_request', '只能读取普通图片文件');
+    if (stat.size > ATTACHMENT_MAX_BYTES) throw new WorkspaceError('attachment_too_large', '图片超过 8 MiB');
+    // 同一文件句柄、有界读取；文件在读取中增长也不能突破内存上限。
+    const buffer = Buffer.alloc(Math.min(stat.size + 1, ATTACHMENT_MAX_BYTES + 1));
+    let size = 0;
+    while (size < buffer.length) {
+      const read = await handle.read(buffer, size, buffer.length - size, size);
+      if (!read.bytesRead) break;
+      size += read.bytesRead;
+    }
+    if (size > stat.size) throw new WorkspaceError('bad_request', '图片正在更新，请重试');
+    const bytes = buffer.subarray(0, size);
+    const mediaType = sniffMediaType(bytes);
+    if (!mediaType.startsWith('image/')) throw new WorkspaceError('bad_request', '仅支持 PNG、JPEG、GIF、WebP 图片');
+    return { bytes, mediaType };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readFileEntry({ workspace, allowlist, requestPath, fsImpl = fs, maxBytes = MAX_FILE_BYTES, encoding = 'utf8' }) {
   const target = await resolveTarget({ requestPath, workspace, allowlist, fsImpl, mustExist: true, expect: 'file', mode: READ_MODE });
   const filePath = target.lexicalPath;

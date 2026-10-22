@@ -5,6 +5,7 @@ import com.deepseek.dshremote.data.ConsoleRepository
 import com.deepseek.dshremote.data.CrashReporter
 import com.deepseek.dshremote.data.PrefsStore
 import com.deepseek.dshremote.data.api.AttachmentImageLoader
+import com.deepseek.dshremote.data.api.WorkspaceImageLoader
 import com.deepseek.dshremote.data.api.DshApiV2
 import com.deepseek.dshremote.data.api.RelayHttpClient
 import com.deepseek.dshremote.data.relay.OkHttpWsTransport
@@ -87,7 +88,7 @@ object Graph {
                 cache = SessionCache(SessionCache.defaultDir(appContext.filesDir)),
                 outbox = Outbox(Outbox.defaultFile(appContext.filesDir)),
                 scope = appScope,
-                images = images,
+                images = WorkspaceImageLoader(images) { path, workspace -> api.fetchWorkspaceImage(path, workspace) },
             )
             holder.set(repository)
             instance = repository

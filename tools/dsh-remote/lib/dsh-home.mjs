@@ -173,29 +173,59 @@ export function slugMatchesPath(slug, workspacePath) {
  *
  * 为什么需要它：slug 编码是有损的（路径里的 `-` 与分隔符同形），
  * 而这份文件记录了 DSH 自己认为的 `path`，是唯一无歧义的来源。
+ * 返回值里**新增** `workspaces`（按 `global.workspaceIds` 的显示顺序），是为了让网关能
+ * 把电脑端工作区同步给手机：`paths` 只够做白名单，手机端还需要标题与稳定 id。
+ * 旧的 `paths/bySlug` 字段保持不变，现有调用方（会话发现）不受影响。
+ *
  * @param {string} dshHome
  * @param {{fsImpl?: object}} [opts]
- * @returns {Promise<{paths: string[], bySlug: Map<string, string>, archivedSessionIds: string[], pinnedSessionIds: string[]}>}
+ * @returns {Promise<{paths: string[], bySlug: Map<string, string>, workspaces: Array<{workspaceId: string, path: string, title: string, sessionIds: string[]}>, archivedSessionIds: string[], pinnedSessionIds: string[]}>}
  */
 export async function readWorkspaceIndex(dshHome, { fsImpl = fs } = {}) {
   const file = path.join(dshHome, 'storages', 'workspace.json');
-  const empty = { paths: [], bySlug: new Map(), archivedSessionIds: [], pinnedSessionIds: [] };
+  const empty = { paths: [], bySlug: new Map(), workspaces: [], archivedSessionIds: [], pinnedSessionIds: [] };
   let raw;
   try {
     raw = JSON.parse(await fsImpl.promises.readFile(file, 'utf8'));
   } catch {
     return empty;
   }
-  const paths = [];
-  const bySlug = new Map();
-  for (const entry of Object.values(raw?.tables?.workspaces ?? {})) {
+  const table = raw?.tables?.workspaces ?? {};
+  const order = Array.isArray(raw?.global?.workspaceIds) ? raw.global.workspaceIds : Object.keys(table);
+  const seen = new Set();
+  /** @type {Array<{workspaceId: string, path: string, title: string, sessionIds: string[]}>} */
+  const workspaces = [];
+  for (const workspaceId of order) {
+    if (typeof workspaceId !== 'string' || seen.has(workspaceId)) continue;
+    const entry = table[workspaceId];
     if (typeof entry?.path !== 'string' || !entry.path) continue;
-    paths.push(entry.path);
-    bySlug.set(encodeWorkspaceSlug(entry.path), entry.path);
+    seen.add(workspaceId);
+    workspaces.push({
+      workspaceId,
+      path: entry.path,
+      title: typeof entry.title === 'string' && entry.title ? entry.title : path.basename(entry.path),
+      sessionIds: Array.isArray(entry.sessionIds) ? entry.sessionIds.filter((id) => typeof id === 'string') : [],
+    });
   }
+  // `global.workspaceIds` 漏项/损坏时仍把表里其余的带上：宁可少一点顺序语义，也不丢工作区。
+  for (const [workspaceId, entry] of Object.entries(table)) {
+    if (seen.has(workspaceId)) continue;
+    if (typeof entry?.path !== 'string' || !entry.path) continue;
+    seen.add(workspaceId);
+    workspaces.push({
+      workspaceId,
+      path: entry.path,
+      title: typeof entry.title === 'string' && entry.title ? entry.title : path.basename(entry.path),
+      sessionIds: Array.isArray(entry.sessionIds) ? entry.sessionIds.filter((id) => typeof id === 'string') : [],
+    });
+  }
+  const paths = workspaces.map((entry) => entry.path);
+  const bySlug = new Map();
+  for (const entry of workspaces) bySlug.set(encodeWorkspaceSlug(entry.path), entry.path);
   return {
     paths,
     bySlug,
+    workspaces,
     archivedSessionIds: Array.isArray(raw?.global?.archivedSessionIds) ? raw.global.archivedSessionIds : [],
     pinnedSessionIds: Array.isArray(raw?.global?.pinnedSessionIds) ? raw.global.pinnedSessionIds : [],
   };

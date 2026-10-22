@@ -13,7 +13,7 @@
   "port": 8787,
   "dshHome": "C:\\Users\\<你的用户名>\\.dsh-remote",
   "serverName": null,
-  "gatewayVersion": "2.9.0",
+  "gatewayVersion": "2.11.0",
   "authRequired": true,
   "maxConcurrent": 2,
   "maxQueue": 100,
@@ -56,10 +56,18 @@
     "includeSubagentsByDefault": false
   },
   "desktop": {
+    "_readme": "电脑端通道。0.2.0 起桌面端用 --port 0 随机端口，port 只是提示：配置端口连不上时 autoDiscover 会从桌面端 Host 进程的监听表里找真实端口。dshHome 必须是桌面端的 home（client-connection/browser-session 凭据在那里）。",
     "enabled": true,
     "host": "127.0.0.1",
     "port": 19387,
+    "autoDiscover": true,
     "dshHome": null
+  },
+  "desktopWorkspaces": {
+    "_readme": "电脑端工作区同步（2.11.0）：定时读 <home>/storages/workspace.json，把电脑上登记的工作区合并进有效白名单并随 GET /api/v2/workspaces 下发（带 title/source）。home 缺省 = desktop.dshHome / mirror.resolvedHome。只同步用户已登记的目录，不扫描磁盘。",
+    "enabled": true,
+    "pollMs": 5000,
+    "home": null
   },
   "desktopWatch": {
     "_readme": "电脑端会话实时中继（网关 2.2.0 新增，默认开）：轮询电脑端 runtime，把「电脑端自己发起」的轮次实时转成网关总线事件，手机端才不是「答完就冻结」。enabled=false 即关闭；pollMs 最小 20ms、attachTimeoutMs 500..600000、streamTimeoutMs 1000..86400000（超出范围启动即报错）。",
@@ -75,7 +83,7 @@
     "homeToken": null,
     "relaySecret": "",
     "relayName": null,
-    "gatewayVersion": "2.9.0",
+    "gatewayVersion": "2.11.0",
     "maxStreams": 64,
     "requestTimeoutMs": 60000,
     "maxFrameBytes": 8388608,

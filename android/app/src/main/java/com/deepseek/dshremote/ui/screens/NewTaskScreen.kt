@@ -74,12 +74,11 @@ import com.deepseek.dshremote.ui.vm.appViewModel
  * → 输入胶囊（就是对话页同款 [ComposerCapsule] + [CircleSendButton]）。
  *
  * 三条"不许骗用户"的规则（都有单测/界面判据钉住）：
- * 1. **权限档只在「仅在手机上执行」时出现**——落电脑端时权限跟随电脑端自己的会话设置，
- *    手机端指定不了（[com.deepseek.dshremote.data.api.accessForHost]）。旧弹窗把这个条件写反了：
- *    恰好只在权限不生效的那一侧画权限芯片。
+ * 1. **权限档两种执行位置都能选**（v2.11.0）：落电脑端时网关会在首轮投递前
+ *    让桌面端执行 `/permission <preset>`；不再出现"想要全部权限只能开仅在手机上执行"。
  * 2. **模型只在网关真的报了目录时才画选择器**（旧网关没有 `GET /api/v2/models`）；
  *    电脑端没连上时（`source="config"`）目录里只有一个模型，界面如实说明"只能按它跑"。
- * 3. **创建成功但模型没生效**时**不自动进对话**：先把原因摆在屏幕上，用户点「仍然进入」才走
+ * 3. **创建成功但模型/权限没生效**时**不自动进对话**：先把原因摆在屏幕上，用户点「仍然进入」才走
  *    （见 [PhoneTasksViewModel.takeReadySessionId]）。
  */
 @Composable
@@ -250,12 +249,26 @@ private fun WorkspaceSection(
             ui.workspaces.forEach { ws ->
                 DropdownMenuItem(
                     text = {
-                        Text(
-                            text = if (ws.exists) ws.path else "${ws.path}（不存在）",
-                            style = type.label,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Column {
+                            Text(
+                                text = buildString {
+                                    append(ws.displayName)
+                                    if (!ws.exists) append("（不存在）")
+                                    if (ws.isDesktopSynced) append(" · 电脑端")
+                                },
+                                style = type.label,
+                                color = if (ws.exists) MaterialTheme.colorScheme.onBackground else DshNeutral,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = ws.path,
+                                style = type.meta,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     },
                     onClick = { onPick(ws.path) },
                 )
@@ -274,9 +287,12 @@ private fun WorkspaceSection(
 /**
  * 「在哪执行」+ 权限档。
  *
- * 两件事必须同时说清（历史缺陷：旧弹窗只在**落电脑端**时画权限芯片，而那正是权限不生效的一侧）：
- * - 落电脑端：权限跟随电脑端 DSH 自己的会话设置，这里**不画**权限档，只说明原因；
- * - 仅在手机上执行：权限档真的会进请求体（`host:"gateway"`），画出来并附后果说明。
+ * v2.11.0 起权限档**两种 host 都能选**，不再被迫为了拿全部权限去开「仅在手机上执行」：
+ * - 落电脑端：网关在首轮投递前让桌面端执行 `/permission <preset>`，电脑端同一会话
+ *   立刻看到同一个档位；进入对话后也能继续改（[SessionDetailScreen] 的权限面板）；
+ * - 仅在手机上执行：沿用 `access` → `DSH_PERMISSION_MODE`（进程启动时固定，运行中不可改）。
+ *
+ * 「仅在手机上执行」保留为**执行位置**开关；权限不再藏在它后面。
  */
 @Composable
 private fun ExecutionSection(
@@ -297,44 +313,44 @@ private fun ExecutionSection(
                 selected = ui.newTaskOnPhoneOnly,
                 onClick = { onPhoneOnlyChange(!ui.newTaskOnPhoneOnly) },
             )
-            if (ui.newTaskOnPhoneOnly) {
-                Row(horizontalArrangement = Arrangement.spacedBy(dimens.gapChip)) {
-                    TaskAccess.values().forEach { access ->
-                        DshFilterChip(
-                            text = access.label,
-                            selected = ui.newTaskAccess == access,
-                            onClick = { onAccessChange(access) },
-                        )
-                    }
+            Text(
+                text = if (ui.newTaskOnPhoneOnly) {
+                    "任务在网关自己的 DSH_HOME 里跑，电脑端 DSH 看不到；权限在进程启动时固定。"
+                } else {
+                    "任务落电脑端 DSH，电脑上能看到、能接管；权限会在首轮投递前设置好。"
+                },
+                style = type.meta,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(dimens.gapChip)) {
+                TaskAccess.values().forEach { access ->
+                    DshFilterChip(
+                        text = access.label,
+                        selected = ui.newTaskAccess == access,
+                        onClick = { onAccessChange(access) },
+                    )
                 }
-                Text(
-                    text = ui.newTaskAccess.detail,
-                    style = type.label,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (ui.newTaskAccess.isDangerous) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = DshWarning,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = "「全部权限」= 放开沙箱 + 审批策略 never，请确认任务内容可信",
-                            style = type.label,
-                            color = DshWarning,
-                        )
-                    }
+            }
+            Text(
+                text = ui.newTaskAccess.detail,
+                style = type.label,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (ui.newTaskAccess.isDangerous) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = DshWarning,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "「全部权限」= 放开沙箱 + 审批策略 never，请确认任务内容可信",
+                        style = type.label,
+                        color = DshWarning,
+                    )
                 }
-            } else {
-                Text(
-                    text = "落在电脑端 DSH：权限跟随电脑端自己的会话设置，手机端指定不了，" +
-                        "所以这里不画权限档（想让权限档生效请打开上面那个开关）。",
-                    style = type.label,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }

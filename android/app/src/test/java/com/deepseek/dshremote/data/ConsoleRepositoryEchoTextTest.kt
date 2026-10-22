@@ -125,16 +125,18 @@ class ConsoleRepositoryEchoTextTest {
      * 纯图片回合：本地是 `[1 张图片]`，服务端正文是网关补的占位文本
      * （`tools/dsh-remote/lib/http.mjs` 的 `TURN_IMAGE_ONLY_TEXT = '（查看这张图片）'`）。
      *
-     * 两者文案不同、原话是空串 ⇒ **有意**不判为同一条：本地那条 "1 张图片" 对用户更清楚。
-     * 屏幕上只会有一行 —— 那由 `TranscriptPager` 的合成 key 幂等保证（见 `TranscriptPagerTest`）。
+     * 权威图片到达后应清理本地占位，避免它残留在回答后方。
      */
     @Test
-    fun `纯图片回合：本地标记不与网关占位正文混为一条`() {
+    fun `纯图片回合：权威图片接管本地占位`() {
         val server = userMessage(seq = 27L, at = AT, text = "（查看这张图片）", imageCount = 1)
         val local = localEcho(ConsoleRepository.echoText("", 1))
 
-        assertFalse(ConsoleRepository.isSameEcho(server, local, clientText = ""))
-        assertFalse(ConsoleRepository.isSameEcho(server, local))
+        assertTrue(ConsoleRepository.isSameEcho(server, local, clientText = ""))
+        assertTrue(ConsoleRepository.isSameEcho(server, local))
+        assertTrue(ConsoleRepository.isSameEcho(server.copy(text = ""), local, clientText = ""))
+        assertFalse(ConsoleRepository.isSameEcho(server.copy(images = emptyList()), local, clientText = ""))
+        assertFalse(ConsoleRepository.isSameEcho(server, local, clientText = "[1 张图片]"))
     }
 
     /** 角色不同永不判为同一条：本地回声只可能是 user，别把助手的回答摘掉。 */

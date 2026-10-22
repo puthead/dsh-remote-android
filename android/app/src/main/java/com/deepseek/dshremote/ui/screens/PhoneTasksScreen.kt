@@ -23,7 +23,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -108,7 +108,7 @@ private enum class TaskFilter(val label: String) {
 fun PhoneTasksScreen(onOpenSession: (String) -> Unit, onCreateTask: () -> Unit) {
     val viewModel = appViewModel { PhoneTasksViewModel(Graph.repository) }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     // 手机任务的条数是本地量级（几十条），搜索直接在本地过滤；VM 没有 query 支持，也不该为它加。
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(TaskFilter.All) }
@@ -117,7 +117,7 @@ fun PhoneTasksScreen(onOpenSession: (String) -> Unit, onCreateTask: () -> Unit) 
     // snackbar 展示完要把 message 消费掉，否则每次回到本页同一条会反复弹（判据见 MessageConsumption.kt）。
     LaunchedEffect(ui.message) {
         val shown = ui.message ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(shown)
+        snackbarHostState.showMessage(shown)
         if (shouldConsumeSnackbarMessage(ui.message, ui.isError)) viewModel.consumeMessage()
     }
     // 新建任务现在在那条独立路由（NewTaskScreen）里完成，创建成功后由它自己跳会话详情；

@@ -1,7 +1,13 @@
 package com.deepseek.dshremote.ui.screens
 
+import androidx.compose.runtime.CompositionLocalProvider
+import com.deepseek.dshremote.ui.markdown.LocalMarkdownImages
+import com.deepseek.dshremote.ui.markdown.MarkdownImages
+
 import android.content.ClipData
 import android.content.ClipboardManager
+import androidx.compose.foundation.text.selection.SelectionContainer
+import com.deepseek.dshremote.ui.components.MessageCopyButton
 import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
@@ -40,13 +46,14 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
+import com.deepseek.dshremote.ui.components.DshSnackbarHost
+import com.deepseek.dshremote.ui.components.DshSnackbarState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -72,14 +79,15 @@ import com.deepseek.dshremote.data.api.ChatMessage
 import com.deepseek.dshremote.data.api.Deliverable
 import com.deepseek.dshremote.data.api.ImageLoader
 import com.deepseek.dshremote.data.api.ImageRef
+import com.deepseek.dshremote.data.api.SessionPermission
 import com.deepseek.dshremote.data.api.SessionViewMode
-import com.deepseek.dshremote.data.api.TaskAccess
 import com.deepseek.dshremote.data.api.TrajectoryKind
 import com.deepseek.dshremote.data.api.TrajectoryRow
 import com.deepseek.dshremote.data.api.WireApprovals
 import com.deepseek.dshremote.ui.components.AssistantMessage
 import com.deepseek.dshremote.ui.components.ComposerImageRow
 import com.deepseek.dshremote.ui.components.DshCard
+import com.deepseek.dshremote.ui.components.DshChip
 import com.deepseek.dshremote.ui.components.DshIconButton
 import com.deepseek.dshremote.ui.components.EmptyHint
 import com.deepseek.dshremote.ui.components.ErrorText
@@ -138,7 +146,7 @@ fun SessionDetailScreen(
         SessionDetailViewModel(Graph.repository, sessionId)
     }
     val ui by viewModel.ui.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarHostState = remember { DshSnackbarState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val dimens = LocalDshDimens.current
@@ -152,13 +160,16 @@ fun SessionDetailScreen(
     // 8 MB 的原图在 UI 线程解一次就是一次可见的掉帧，甚至 OOM。
     val imagePicker = rememberImagePicker(
         onPicked = { uri, displayName -> viewModel.attachImage(uri, displayName) },
-        onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
+        onError = { message -> scope.launch { snackbarHostState.showMessage(message) } },
     )
 
     var showTodos by rememberSaveable { mutableStateOf(true) }
     var moreMenu by remember { mutableStateOf(false) }
     var filterMenu by remember { mutableStateOf(false) }
     var kindFilter by rememberSaveable { mutableStateOf(TrajectoryFilter.All) }
+    // 全部权限不弹"确定吗"就生效，风险太高：与桌面端同一套「显式勾选风险确认」。
+    var fullAccessConfirm by remember { mutableStateOf(false) }
+    var fullAccessAcknowledged by remember { mutableStateOf(false) }
 
     // 全屏看图：列表与面板都只是"点开某一组图的第几张"，
     // 真正的查看器只有这一个实例（多开会让返回键的语义变得说不清）。
@@ -259,7 +270,7 @@ fun SessionDetailScreen(
         // 修复前它会在每次进入/重建本页时重复出现；修复后同一条文案只会出现一次，
         // 紧接着一行 consumed=true（错误条则是 consumed=false, keep-as-error）。
         if (BuildConfig.DEBUG) Log.d(TagSnackbar, "snackbar-effect fire: $shown")
-        snackbarHostState.showSnackbar(shown)
+        snackbarHostState.showMessage(shown)
         val consume = shouldConsumeSnackbarMessage(ui.message, ui.isError)
         if (consume) viewModel.consumeMessage()
         if (BuildConfig.DEBUG) {
@@ -270,12 +281,16 @@ fun SessionDetailScreen(
     // 末尾标识：只有"末尾这一条换了"才需要贴底。
     // 为什么不用 messages.size 当触发条件：加载更早也会让 size 变大，而那时用户正在往回看，
     // 一次 animateScrollToItem 就把人拽回底部，分页等于白做（旧实现正是被这个抵消的）。
-    val conversationTail: Any? = ui.messages.lastOrNull()?.let { Triple(it.seq, it.text.length, it.toolCalls.size) }
+    val readableMessages = remember(ui.messages) { conversationMessages(ui.messages) }
+    val messageKeys = remember(readableMessages, ui.streaming) { conversationKeys(readableMessages, ui.streaming) }
+    val hiddenToolCount = ui.messages.sumOf { it.toolCalls.size }
+    val failedToolCount = ui.messages.sumOf { message -> message.toolCalls.count { it.isError } }
+    val conversationTail: Any? = readableMessages.lastOrNull()?.let { Triple(it.seq, it.text.length, it.images.size) }
     LaunchedEffect(conversationTail, ui.viewMode) {
         if (ui.viewMode != SessionViewMode.CONVERSATION || conversationTail == null) return@LaunchedEffect
         // 用户上翻历史 / 正在取更早：绝不抢滚动，改用右下角「回到最新」
         if (!atBottom || ui.loadingOlder) return@LaunchedEffect
-        runCatching { listState.animateScrollToItem(ui.messages.size) }
+        runCatching { listState.animateScrollToItem(readableMessages.size) }
     }
 
     // 上拉到顶自动取更早一页：判定与轨迹视图共用（TrajectoryList.kt 的 LoadOlderOnReachTop），
@@ -289,7 +304,7 @@ fun SessionDetailScreen(
     // 消费「回到最新」一次性信号：tick 每次点击 +1，首次组合时是 0（不该抢滚动）。
     LaunchedEffect(ui.scrollToNewestTick) {
         if (ui.scrollToNewestTick <= 0) return@LaunchedEffect
-        val lastIndex = if (ui.viewMode == SessionViewMode.TRAJECTORY) ui.trajectory.size else ui.messages.size
+        val lastIndex = if (ui.viewMode == SessionViewMode.TRAJECTORY) ui.trajectory.size else readableMessages.size
         runCatching { listState.animateScrollToItem(lastIndex) }
     }
 
@@ -301,7 +316,7 @@ fun SessionDetailScreen(
         // 跳到某一轮 = 主动离开最新那条：把闸门打开，让贴底判定在动画停下后自己收敛，
         // 否则"用户正在往回看"与"界面以为仍在底部"会同时成立（右下角不出现「回到最新」）。
         userScrolled = true
-        val index = ui.messages.indexOfFirst { it.seq == target }
+        val index = conversationTargetIndex(readableMessages, ui.messages, target)
         if (index >= 0) {
             runCatching { listState.animateScrollToItem(index + 1) }
             atBottom = false
@@ -313,7 +328,7 @@ fun SessionDetailScreen(
     // 与 ui.message 那套分开，是因为它不是错误、也不需要常驻，展示完就消费。
     LaunchedEffect(ui.jumpNote) {
         val note = ui.jumpNote ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(note)
+        snackbarHostState.showMessage(note)
         viewModel.consumeJumpNote()
     }
 
@@ -345,7 +360,7 @@ fun SessionDetailScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { DshSnackbarHost(snackbarHostState) },
         containerColor = DetailBackground,
     ) { _ ->
         // 不用 Scaffold 的 innerPadding：它把顶部状态栏和底部手势条一起算进来，
@@ -407,6 +422,15 @@ fun SessionDetailScreen(
                                     viewModel.scrollToNewest()
                                 },
                             )
+                            if (ui.canEditPermission) {
+                                DropdownMenuItem(
+                                    text = { MenuLabel("权限…（当前：${ui.permission?.currentLabel.orEmpty()}）") },
+                                    onClick = {
+                                        moreMenu = false
+                                        viewModel.openPermissionSheet()
+                                    },
+                                )
+                            }
                             if (ui.todos.isNotEmpty()) {
                                 DropdownMenuItem(
                                     text = { MenuLabel(if (showTodos) "隐藏待办" else "显示待办") },
@@ -462,7 +486,7 @@ fun SessionDetailScreen(
                             // 协议没有导出接口，落点是系统剪贴板：写文件会让用户以为存到电脑上了
                             copyToClipboard(context, trajectoryExportText(visibleRows, totalTurns))
                             scope.launch {
-                                snackbarHostState.showSnackbar("已复制 ${visibleRows.size} 步轨迹到剪贴板")
+                                snackbarHostState.showMessage("已复制 ${visibleRows.size} 步轨迹到剪贴板")
                             }
                         },
                     )
@@ -558,6 +582,21 @@ fun SessionDetailScreen(
                 }
             }
 
+            if (conversationSelected && hiddenToolCount > 0) {
+                DetailNoteRow(
+                    text = "已收起 $hiddenToolCount 次工具调用" +
+                        if (failedToolCount > 0) " · $failedToolCount 次异常" else "",
+                    tone = if (failedToolCount > 0) DshWarning else DshOnSurfaceVariant,
+                    icon = Icons.Default.Info,
+                    action = "查看轨迹",
+                    onAction = {
+                        savedViewMode = SessionViewMode.TRAJECTORY
+                        viewModel.switchView(SessionViewMode.TRAJECTORY)
+                    },
+                    modifier = Modifier.padding(horizontal = dimens.pageMargin, vertical = 4.dp),
+                )
+            }
+
             // 内容区：FAB 叠在两种视图之上，因为"回到最新"对它们都成立
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (conversationSelected) {
@@ -593,12 +632,11 @@ fun SessionDetailScreen(
                                     noun = "消息",
                                 )
                             }
-                            // 不设 key：本地乐观插入的用户消息与服务端消息可能撞 seq，
-                            // 重复 key 会让 LazyColumn 直接抛异常，这里用下标更稳。
-                            itemsIndexed(ui.messages) { index, message ->
+                            itemsIndexed(readableMessages, key = { index, _ -> messageKeys[index] }) { index, message ->
                                 MessageItem(
                                     message = message,
-                                    streaming = ui.streaming && index == ui.messages.lastIndex,
+                                    workspace = ui.session?.workspace.orEmpty(),
+                                    streaming = ui.streaming && index == readableMessages.lastIndex,
                                     expandedTools = ui.expandedTools,
                                     onToggleTool = viewModel::toggleTool,
                                     onOpenDeliverable = { deliverable ->
@@ -695,7 +733,8 @@ fun SessionDetailScreen(
                     pendingApproval = pendingApproval,
                     onInputChange = viewModel::onInputChange,
                     onSend = viewModel::send,
-                    onNotice = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
+                    onPermissionClick = viewModel::openPermissionSheet,
+                    onNotice = { message -> scope.launch { snackbarHostState.showMessage(message) } },
                     onPickGallery = { imagePicker.pickFromGallery() },
                     onTakePhoto = { imagePicker.takePhoto() },
                     onRemoveImage = viewModel::removeImage,
@@ -753,6 +792,58 @@ fun SessionDetailScreen(
         )
     }
 
+    // 对话内改权限（v2.11.0）：入口在输入区上方那行说明与「…」菜单里。
+    if (ui.permissionSheetOpen && ui.permission != null) {
+        PermissionSheet(
+            permission = ui.permission!!,
+            saving = ui.permissionSaving,
+            error = ui.permissionError,
+            onSelect = { preset ->
+                if (preset == SessionPermission.PRESET_FULL) {
+                    fullAccessAcknowledged = false
+                    fullAccessConfirm = true
+                } else {
+                    viewModel.changePermission(preset)
+                }
+            },
+            onDismiss = viewModel::closePermissionSheet,
+        )
+    }
+
+    if (fullAccessConfirm) {
+        AlertDialog(
+            onDismissRequest = { fullAccessConfirm = false },
+            title = { Text("启用「全部权限」？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "全部权限会放开沙箱并关闭审批（approval=never），" +
+                            "电脑上的文件、命令与网络操作都可以直接执行。请只在信任当前任务时使用。",
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = fullAccessAcknowledged,
+                            onCheckedChange = { fullAccessAcknowledged = it },
+                        )
+                        Text("我已了解风险，并愿意继续")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = fullAccessAcknowledged,
+                    onClick = {
+                        fullAccessConfirm = false
+                        viewModel.changePermission(SessionPermission.PRESET_FULL)
+                    },
+                ) { Text("启用全部权限") }
+            },
+            dismissButton = {
+                TextButton(onClick = { fullAccessConfirm = false }) { Text("取消") }
+            },
+        )
+    }
+
     // 全屏看图：点缩略图打开，返回键/点图/右上角关闭
     if (viewerImages.isNotEmpty()) {
         ImageViewerDialog(
@@ -779,6 +870,7 @@ private fun DetailComposer(
     pendingApproval: PendingApprovalPrompt?,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
+    onPermissionClick: () -> Unit,
     onNotice: (String) -> Unit,
     // 相册 / 拍照的入口把动作交给调用方（那里才有 ActivityResultLauncher），
     // 输入区本身不认识 Activity Result API —— 它只负责"点了哪个按钮"
@@ -815,15 +907,27 @@ private fun DetailComposer(
                 .fillMaxWidth()
                 .padding(horizontal = dimens.pageMargin, vertical = 8.dp),
         ) {
-            Text(
-                // 接管时的说明行换成语义说明：这时"只读/不可续"那条已经不重要了，
-                // 用户需要知道的是"我这一答会发生什么"
-                text = ui.pendingApproval?.let { approvalComposerNote(it) } ?: composerNote(ui),
-                style = type.meta,
-                color = DshOnSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    // 接管时的说明行换成语义说明：这时"只读/不可续"那条已经不重要了，
+                    // 用户需要知道的是"我这一答会发生什么"
+                    text = ui.pendingApproval?.let { approvalComposerNote(it) } ?: composerNote(ui),
+                    style = type.meta,
+                    color = DshOnSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                // 只有真正能改的时候才给入口：网关自有会话 / 只读 / 旧网关都不画一个
+                // 点了会报错的"改权限"。当前档位就在左边那句话里。
+                if (ui.pendingApproval == null && ui.canEditPermission) {
+                    Spacer(Modifier.width(8.dp))
+                    DshChip(
+                        text = "改权限",
+                        onClick = onPermissionClick,
+                    )
+                }
+            }
             // 收不到审批时的诊断条：没有它，真机上"电脑端没启动/凭据不可用"与
             // "确实没有待答"在界面上完全一样（都是一片安静），用户只会以为 App 坏了。
             //
@@ -946,11 +1050,11 @@ private fun MenuLabel(
 /**
  * 输入区上方的权限说明（画稿 02 那一行）。
  *
- * 措辞按会话**真实**的执行方与可写状态生成，而不是写死画稿里的档位：
- * - 电脑端会话：手机在请求里根本不带 `access`（见 data/api/TaskAccess.kt 的 `accessForHost`），
- *   权限由电脑端 DSH 自己的设置决定 —— 所以只能承诺"跟随电脑端"；
- * - 网关/手机任务：档位由网关按请求下发，`TaskAccess.DEFAULT` 就是默认档（workspace-write），
- *   这里显示默认档的名字，而不是编一个具体策略；
+ * 措辞按会话**真实**的执行方、可写状态与服务端回执生成，而不是写死画稿里的档位：
+ * - 电脑端会话：显示网关回读的 `permission.currentValue`（只读/仅工作区/全部权限），
+ *   并在可改时给「改权限」入口（v2.11.0）；
+ * - 网关/手机任务：显示 `access` 决定的当前档位，并明确"创建时固定"（SDK 没有运行中 setter）；
+ * - 旧网关/电脑端离线：显示"权限未知"，**不拿默认档假装知道**；
  * - 不可写 / 不可续：直接说结论，别让用户打完字才被拒。
  */
 /**
@@ -966,8 +1070,8 @@ private fun approvalRelevant(ui: SessionDetailViewModel.UiState): Boolean =
 private fun composerNote(ui: SessionDetailViewModel.UiState): String = when {
     !ui.writable -> "只读会话 · 无法从手机发送消息"
     !ui.resumable -> "本会话已停止 · 无法继续发送"
-    ui.session?.isDesktopDriven == true -> "发送到电脑端执行 · 权限跟随电脑端（workspace-write · ask）"
-    else -> "发送到网关执行 · 权限按网关下发（${TaskAccess.DEFAULT.label}）"
+    ui.session?.isDesktopDriven == true -> "发送到电脑端执行 · ${ui.permissionNote}"
+    else -> "发送到网关执行 · ${ui.permissionNote}"
 }
 
 private fun composerPlaceholder(ui: SessionDetailViewModel.UiState): String = when {
@@ -1098,6 +1202,7 @@ private fun LazyListState.isNearBottom(): Boolean {
 @Composable
 private fun MessageItem(
     message: ChatMessage,
+    workspace: String,
     streaming: Boolean,
     expandedTools: Set<String>,
     onToggleTool: (String) -> Unit,
@@ -1120,39 +1225,50 @@ private fun MessageItem(
                 },
             ),
     ) {
-        when {
-            message.isUser -> UserBubble(
-                text = message.text,
-                at = message.at,
-                images = message.images,
-                loader = loader,
-                onOpenImage = onOpenImage,
-            )
-
-            message.role == "system" -> DshCard(containerColor = DshSurfaceVariant) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    Text(
-                        text = "系统",
-                        style = LocalDshType.current.meta.copy(fontWeight = FontWeight.Bold),
-                        color = DshOnSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
+        CompositionLocalProvider(LocalMarkdownImages provides MarkdownImages(workspace, loader, onOpenImage)) {
+            SelectionContainer {
+                when {
+                    message.todos.isNotEmpty() && message.text.isBlank() -> TodoListCard(message.todos)
+                    message.isUser -> UserBubble(
                         text = message.text,
-                        style = LocalDshType.current.body,
-                        color = DshOnBackground,
+                        at = message.at,
+                        images = message.images,
+                        loader = loader,
+                        onOpenImage = onOpenImage,
+                    )
+
+                    message.role == "system" -> DshCard(containerColor = DshSurfaceVariant) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                            Text(
+                                text = "系统",
+                                style = LocalDshType.current.meta.copy(fontWeight = FontWeight.Bold),
+                                color = DshOnSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = message.text,
+                                style = LocalDshType.current.body,
+                                color = DshOnBackground,
+                            )
+                        }
+                    }
+
+                    else -> AssistantMessage(
+                        message = message,
+                        expandedTools = expandedTools,
+                        onToggleTool = onToggleTool,
+                        onOpenDeliverable = onOpenDeliverable,
+                        streaming = streaming,
+                        loader = loader,
+                        onOpenImage = onOpenImage,
                     )
                 }
             }
-
-            else -> AssistantMessage(
-                message = message,
-                expandedTools = expandedTools,
-                onToggleTool = onToggleTool,
-                onOpenDeliverable = onOpenDeliverable,
-                streaming = streaming,
-                loader = loader,
-                onOpenImage = onOpenImage,
+        }
+        if (message.text.isNotBlank()) {
+            MessageCopyButton(
+                text = message.text,
+                modifier = Modifier.align(if (message.isUser) Alignment.End else Alignment.Start),
             )
         }
     }

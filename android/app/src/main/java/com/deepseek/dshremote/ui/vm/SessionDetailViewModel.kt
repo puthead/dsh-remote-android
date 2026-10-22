@@ -11,6 +11,7 @@ import com.deepseek.dshremote.data.api.DshApiV2
 import com.deepseek.dshremote.data.api.ImageLoader
 import com.deepseek.dshremote.data.api.ImagePayloads
 import com.deepseek.dshremote.data.api.PendingImage
+import com.deepseek.dshremote.data.api.SessionPermission
 import com.deepseek.dshremote.data.api.SessionSummary
 import com.deepseek.dshremote.data.api.SessionViewMode
 import com.deepseek.dshremote.data.api.TodoExtractor
@@ -135,6 +136,13 @@ class SessionDetailViewModel(
         val jumpNote: String? = null,
         /** 用户最近跳过去的那一轮（null = 跟着最新走，见 [activeTurn]）。 */
         val focusedTurn: Int? = null,
+        // ---------- 会话权限（契约 §7.9，v2.11.0）----------
+        /** 权限选择面板是否展开。 */
+        val permissionSheetOpen: Boolean = false,
+        /** 有一条权限修改正在提交（界面禁用选项并显示进度）。 */
+        val permissionSaving: Boolean = false,
+        /** 权限修改失败的原因（显示在面板里，不关面板）。 */
+        val permissionError: String? = null,
     ) {
         /** 服务端一共多少轮（目录没拉到时为 0）。 */
         val turnCount: Int get() = turnIndex?.total ?: 0
@@ -203,6 +211,30 @@ class SessionDetailViewModel(
 
         /** 输入框整体是否可用：可写 **且** 会话仍可继续。 */
         val inputEnabled: Boolean get() = writable && resumable
+
+        /** 当前权限视图（null = 旧网关/桌面端离线，界面显示"权限未知"）。 */
+        val permission: SessionPermission? get() = session?.permission
+
+        /** 能不能点开权限面板：必须是可写电脑端会话，且网关宣告 editable。 */
+        val canEditPermission: Boolean get() = session?.canEditPermission == true
+
+        /**
+         * 输入区上方那句权限文案。
+         *
+         * 电脑端会话：`权限：仅工作区`（未知就说未知，绝不拿默认档假装知道）；
+         * 网关会话：`权限：仅当前工作区（创建时固定）`，因为 SDK 没有运行中 setter。
+         */
+        val permissionNote: String
+            get() {
+                val current = session
+                val known = permission
+                if (known == null) return "权限未知（电脑端离线或旧网关）"
+                return if (current?.isDesktopDriven == true) {
+                    "权限：${known.currentLabel}"
+                } else {
+                    "权限：${known.currentLabel}（创建时固定）"
+                }
+            }
 
         /**
          * 电脑端会话可续聊时的一句说明。
@@ -405,6 +437,62 @@ class SessionDetailViewModel(
     fun switchView(mode: SessionViewMode) {
         if (_ui.value.viewMode == mode) return
         _ui.update { it.copy(viewMode = mode) }
+    }
+
+    // ---------- 会话权限（v2.11.0）----------
+
+    /** 打开权限面板。不可编辑时什么都不做（界面也不会给入口）。 */
+    fun openPermissionSheet() {
+        if (!_ui.value.canEditPermission) return
+        _ui.update { it.copy(permissionSheetOpen = true, permissionError = null) }
+    }
+
+    /** 关闭权限面板；提交中不允许关（避免用户以为改了、其实请求被取消）。 */
+    fun closePermissionSheet() {
+        if (_ui.value.permissionSaving) return
+        _ui.update { it.copy(permissionSheetOpen = false, permissionError = null) }
+    }
+
+    /**
+     * 提交权限修改（预设名：`read-only` / `workspace-write` / `danger-full-access`）。
+     *
+     * 成功后面板自动关闭并提示一次；失败**不关面板**，把原因留在原地让用户重试
+     * （与轮次导航同一个交互原则：用户还在面板上时，消失的提示等于没提示）。
+     */
+    fun changePermission(preset: String) {
+        val state = _ui.value
+        if (state.permissionSaving) return
+        if (!state.canEditPermission) {
+            _ui.update { it.copy(permissionError = "当前会话不支持在手机上修改权限") }
+            return
+        }
+        if (state.permission?.currentValue == preset) {
+            closePermissionSheet()
+            return
+        }
+        _ui.update { it.copy(permissionSaving = true, permissionError = null) }
+        viewModelScope.launch {
+            repository.setSessionPermission(sessionId, preset)
+                .onSuccess { permission ->
+                    _ui.update {
+                        it.copy(
+                            permissionSaving = false,
+                            permissionSheetOpen = false,
+                            permissionError = null,
+                            message = "权限已改为「${permission.currentLabel}」",
+                            isError = false,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _ui.update {
+                        it.copy(
+                            permissionSaving = false,
+                            permissionError = "修改权限失败：${error.friendlyMessage()}",
+                        )
+                    }
+                }
+        }
     }
 
     /**

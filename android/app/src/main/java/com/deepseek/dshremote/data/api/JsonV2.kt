@@ -68,7 +68,42 @@ object JsonV2 {
         // 手机发起但落在电脑端执行的会话是 createdBy=phone + source=computer + driver=desktop。
         // 老网关（2.0.0）不发该字段 → 由 SessionSummary.createdBy 按 source 回退成旧行为。
         createdByFlag = obj.optStringOrNull("createdBy"),
+        // 权限视图（v2.11.0）：旧网关没有 → null（界面显示"未知"，不拿默认档假装知道）。
+        permission = parseSessionPermission(obj.optJSONObject("permission")),
     )
+
+    /**
+     * `permission` 视图（契约 §4.2，v2.11.0）。
+     *
+     * 宽容策略：currentValue 缺失/空 → null（没有当前值就整块不显示）；
+     * 单个 option 坏了只跳过它自己。`editable` 缺省 false —— 宁可少给入口，
+     * 也不能画出一个点了会 400 的权限开关。
+     */
+    fun parseSessionPermission(obj: JSONObject?): SessionPermission? {
+        if (obj == null) return null
+        val currentValue = obj.optTextOrEmpty("currentValue")
+        if (currentValue.isEmpty()) return null
+        val options = ArrayList<PermissionOption>()
+        val rawOptions = obj.optJSONArray("options")
+        for (i in 0 until (rawOptions?.length() ?: 0)) {
+            val item = rawOptions?.optJSONObject(i) ?: continue
+            val value = item.optTextOrEmpty("value")
+            if (value.isEmpty()) continue
+            options += PermissionOption(
+                value = value,
+                name = item.optTextOrEmpty("name").ifEmpty { value },
+                description = item.optTextOrEmpty("description"),
+                selectable = item.optBoolean("selectable", true),
+            )
+        }
+        return SessionPermission(
+            currentValue = currentValue,
+            options = options,
+            editable = obj.optBoolean("editable", false),
+            source = obj.optStringOrNull("source"),
+            reason = obj.optStringOrNull("reason"),
+        )
+    }
 
     /**
      * 会话来源（契约 §7.3 两类会话分离）。
@@ -165,6 +200,7 @@ object JsonV2 {
             truncated = obj.optBoolean("truncated", false),
             images = parseImages(obj.optJSONArray("images")),
             turn = obj.optIntOrNull("turn"),
+            reasoning = obj.optStringOrNull("reasoning").orEmpty(),
         )
     }
 
@@ -289,6 +325,10 @@ object JsonV2 {
                 changed = item.optInt("changed", git?.optInt("changed", 0) ?: 0),
                 insertions = item.optInt("insertions", git?.optInt("insertions", 0) ?: 0),
                 deletions = item.optInt("deletions", git?.optInt("deletions", 0) ?: 0),
+                // v2.11.0：电脑端工作区同步。旧网关没有这些字段 → 空串/0，界面不显示来源。
+                source = item.optString("source", ""),
+                title = item.optStringOrNull("title"),
+                sessionCount = item.optInt("sessionCount", 0),
             )
         }
         return result
@@ -455,6 +495,20 @@ object JsonV2 {
                 obj.optStringOrNull("modelWarning"),
                 nested?.optStringOrNull("modelWarning"),
             ).firstOrNull { !it.isNullOrEmpty() },
+            // 权限是否生效（v2.11.0）：与模型同一条规则 —— 只回了 warning 没回布尔时，
+            // warning 本身就说明没生效；两个都没有 = 旧网关/没请求权限，不许当成成功。
+            permissionApplied = when {
+                obj.has("permissionApplied") -> obj.optBoolean("permissionApplied", false)
+                nested?.has("permissionApplied") == true -> nested.optBoolean("permissionApplied", false)
+                obj.optStringOrNull("permissionWarning") != null -> false
+                nested?.optStringOrNull("permissionWarning") != null -> false
+                else -> null
+            },
+            permissionWarning = sequenceOf(
+                obj.optStringOrNull("permissionWarning"),
+                nested?.optStringOrNull("permissionWarning"),
+            ).firstOrNull { !it.isNullOrEmpty() },
+            permission = parseSessionPermission(obj.optJSONObject("permission") ?: nested?.optJSONObject("permission")),
         )
     }
 
@@ -653,6 +707,9 @@ object JsonV2 {
                 // 谁发起的也要一起缓存：丢了它，"手机发起 · 电脑执行"的会话离线回放时会
                 // 从「手机任务」页消失（isPhoneTask 会回退成 desktop）。同样只在服务端给过时才写。
                 session.createdByFlag?.let { put("createdBy", it) }
+                // 权限视图也要进缓存：离线打开会话时不能把"全部权限"显示成"权限未知"，
+                // 否则用户会以为自己的设置丢了（v2.11.0）。
+                session.permission?.let { put("permission", permissionToJson(it)) }
                 put("lastTurn", JSONObject().apply {
                     put("state", session.lastTurnState ?: JSONObject.NULL)
                     put("reason", session.lastTurnReason ?: JSONObject.NULL)
@@ -660,6 +717,24 @@ object JsonV2 {
             })
         }
         return JSONObject().put("sessions", array).toString()
+    }
+
+    /** 权限视图 → JSON（离线缓存用；字段名与网关 wire 保持一致）。 */
+    fun permissionToJson(permission: SessionPermission): JSONObject = JSONObject().apply {
+        put("currentValue", permission.currentValue)
+        permission.source?.let { put("source", it) }
+        permission.reason?.let { put("reason", it) }
+        put("editable", permission.editable)
+        put("options", JSONArray().apply {
+            permission.options.forEach { option ->
+                put(JSONObject().apply {
+                    put("value", option.value)
+                    put("name", option.name)
+                    put("description", option.description)
+                    put("selectable", option.selectable)
+                })
+            }
+        })
     }
 
     fun sessionsFromJson(text: String): List<SessionSummary> = try {
@@ -676,6 +751,12 @@ object JsonV2 {
                 put("role", message.role)
                 put("at", message.at)
                 put("text", message.text)
+                put("reasoning", message.reasoning)
+                put("todos", JSONArray().apply {
+                    message.todos.forEach { todo ->
+                        put(JSONObject().put("content", todo.text).put("status", todo.status))
+                    }
+                })
                 put("truncated", message.truncated)
                 // 轮次号与图片引用必须一起落盘：漏掉它们时，离线重开一个会话会看到
                 // "图片气泡只剩空气壳、轮次导航没有锚点"——而在线时一切正常，

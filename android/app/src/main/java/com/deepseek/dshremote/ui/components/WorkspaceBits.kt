@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -36,6 +37,10 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -224,7 +229,7 @@ fun DshInputField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
-    height: Dp = 40.dp,
+    height: Dp = 48.dp,
     mono: Boolean = false,
     enabled: Boolean = true,
     style: TextStyle? = null,
@@ -233,6 +238,7 @@ fun DshInputField(
     imeAction: androidx.compose.ui.text.input.ImeAction = androidx.compose.ui.text.input.ImeAction.Done,
     onImeAction: () -> Unit = {},
 ) {
+    var focused by remember { mutableStateOf(false) }
     val type = LocalDshType.current
     val resolved = style ?: if (mono) {
         type.body.copy(fontFamily = type.monoBody.fontFamily)
@@ -240,12 +246,13 @@ fun DshInputField(
         type.body
     }
     DshCard(
-        modifier = modifier.fillMaxWidth().height(height),
+        modifier = modifier.fillMaxWidth().heightIn(min = height),
         containerColor = DshSurfaceVariant,
+        borderColor = if (focused) DshPrimary else DshOutline,
         radius = DshRadius.Sub,
     ) {
         Box(
-            modifier = Modifier.fillMaxWidth().height(height).padding(horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = height).padding(horizontal = 14.dp, vertical = 10.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             if (value.isEmpty()) {
@@ -269,7 +276,7 @@ fun DshInputField(
                 cursorBrush = SolidColor(DshPrimary),
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
                 keyboardActions = KeyboardActions(onDone = { onImeAction() }, onSearch = { onImeAction() }),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
             )
         }
     }

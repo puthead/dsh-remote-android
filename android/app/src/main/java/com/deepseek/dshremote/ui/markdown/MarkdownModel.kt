@@ -25,7 +25,7 @@ sealed interface MdInline {
     /** 链接，[children] 为可见文字，[url] 为跳转目标。 */
     data class Link(val children: List<MdInline>, val url: String) : MdInline
 
-    /** 图片。App 不下载远端图片（无网络权限收敛考虑），以占位形式展示 alt 与地址。 */
+    /** 图片。本地路径由 MarkdownImages 经网关加载，其他地址保留链接。 */
     data class Image(val alt: String, val url: String) : MdInline
 
     /** 段落内的单个换行（Markdown 里的 soft line break）。 */

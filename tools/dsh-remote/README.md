@@ -98,6 +98,10 @@ tools/dsh-remote/
 | `maxTimeoutSec` | `86400` | `timeoutSec` 上限 |
 | `workspaceAllowlist` | `[]` | 绝对路径数组；**空数组 = 拒绝所有任务**（默认拒绝，避免忘记配置导致全盘可写） |
 | `defaultWorkspace` | 白名单首项 | 请求未带 `workspace` 时的默认值 |
+| `desktop.autoDiscover` | `true` | 桌面端 0.2.0 随机端口自动发现（见 §6.7 的端口说明）；`false` = 只认 `desktop.port` |
+| `desktopWorkspaces.enabled` | `true` | 从 `<desktopHome>/storages/workspace.json` 同步电脑端工作区到 `GET /api/v2/workspaces` |
+| `desktopWorkspaces.pollMs` | `5000` | 工作区同步轮询间隔（列表请求会额外重读一次） |
+| `desktopWorkspaces.home` | `null` | 同步源 home；null = `desktop.dshHome` / `mirror.resolvedHome` |
 | `dsh.node` | `null` | DSH 自带 `node.exe` 绝对路径 |
 | `dsh.binPath` | `null` | `dsh` CLI 的 `bin.js` 绝对路径 |
 | `dsh.profile` | `headless` | profile 名 |
@@ -400,25 +404,32 @@ $body | ConvertFrom-Json
 
 **前置条件（缺一不可）**
 
-1. **桌面端 DSH 正在运行**，且其 runtime 在回环端口上可达（本机实测为 `127.0.0.1:19387`）。
+1. **桌面端 DSH 正在运行**。自 v2.11.0 起网关会**自动发现**它监听的端口：
+   桌面端 0.2.0 用 `--port 0`，端口由系统随机分配，配置里的 `desktop.port`（默认 19387）只是提示。
 2. 网关与桌面端**同机同用户**（凭据依赖当前用户的 `.dsh`）。
 
-**怎么确认桌面端端口**：
+**自动发现怎么工作**（`lib/desktop-discovery.mjs` + `DesktopApi.ensurePort()`）：
+
+1. 先试 `desktop.port`（兼容老版本固定端口/显式配置）；
+2. 连不上时枚举「命令行含 `dsh-desktop-host/lib/index.js`」的进程正在监听的端口；
+3. 每个候选端口用 `~/.dsh` 里的 browser-session secret 自签 cookie，打一发极小
+   `session/projections`（鉴权通过且拿到 result 信封才算命中）；
+4. 命中后缓存，后续请求不再扫描；连接被拒/401 时清缓存，下一次请求重新发现。
+   `/api/v2/health` 的 `desktop.{port,configuredPort,autoDiscover,discovery}` 是现场读数。
 
 ```powershell
-# 1) 找出桌面端进程占用的回环监听端口（19387 是本机实测值，不保证跨机一致）
+# 手动核对（排障用）：列出桌面端 Host 进程监听的端口
+$pids = Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -match 'dsh-desktop-host[\\/]lib[\\/]index\.js' } |
+  Select-Object -ExpandProperty ProcessId
 Get-NetTCPConnection -State Listen |
-  Where-Object { $_.LocalAddress -in '127.0.0.1','::1' } |
+  Where-Object { $pids -contains $_.OwningProcess } |
   Select-Object LocalAddress, LocalPort, OwningProcess
-
-# 2) 看是不是 DSH 的桌面/host 进程
-Get-CimInstance Win32_Process -Filter "Name='DeepSeek Harness.exe'" |
-  Select-Object ProcessId, CommandLine
-
-# 3) 探活：桌面端 **没有** `/api/health` 之类的探活路由（实测 404），
-#    适配层的探测方法是发一个极小 `session/list`（`lib/desktop-api.mjs:330-335` 的 probe()）
-#    并比对返回的会话条数；最省事的判据仍是第 1 步（有没有回环监听端口）+ 第 2 步（进程是不是 DSH）。
 ```
+
+> 桌面端**没有** `/api/health` 之类的探活路由（实测 404），所以适配层用 `session/projections`
+> 做端口探测、用 `session/list` 做能力探活（`lib/desktop-api.mjs` 的 `probe()`）。
+> 自动发现关掉（`desktop.autoDiscover:false`）时只认 `desktop.port`，桌面端随机端口会连不上。
 
 **凭据在哪里（只读，不要复制到别处）**：
 

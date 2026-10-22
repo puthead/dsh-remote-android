@@ -20,6 +20,14 @@ import { DeviceStore, PairingManager } from './tokens.mjs';
 import { RateLimiter, isLoopbackAddress, normalizeIp } from './ratelimit.mjs';
 import { TaskError, TaskManager } from './tasks.mjs';
 import { describeAccess, resolveAccess } from './permission.mjs';
+import {
+  accessFromPermissionPreset,
+  normalizePermissionPreset,
+  PERMISSION_VALUES,
+  permissionPresetFromAccess,
+  permissionPresetFromProjection,
+  permissionView,
+} from './session-permission.mjs';
 import { isWithin, listWorkspaces, resolveWorkspace } from './workspace.mjs';
 import { createLogger, redactSecrets, randomBase64Url } from './util.mjs';
 import { SessionMirror, TRANSCRIPT_LIMITS } from './session-reader.mjs';
@@ -29,9 +37,9 @@ import { PhoneSessionIndex } from './phone-sessions.mjs';
 import { DesktopApi, DEFAULT_DESKTOP_PORT, translateDesktopEvent } from './desktop-api.mjs';
 import { ApprovalBridge } from './approvals.mjs';
 import { RelayClient, normalizeRelayUrl } from './relay-client.mjs';
-import { READ_MODE, WorkspaceError, listDirectory, readFileEntry, searchWorkspace } from './workspace-fs.mjs';
+import { READ_MODE, WorkspaceError, listDirectory, readFileEntry, readWorkspaceImage, searchWorkspace } from './workspace-fs.mjs';
 import { gitDiff, gitStatus, listWorkspacesWithVcs } from './workspace-git.mjs';
-import { isDerivedSession, SESSION_DIR_RE } from './dsh-home.mjs';
+import { isDerivedSession, readWorkspaceIndex, SESSION_DIR_RE } from './dsh-home.mjs';
 import { ATTACHMENT_ID_RE, ATTACHMENT_MAX_BYTES, normalizeAttachmentId, resolveAttachment } from './attachments.mjs';
 
 /** transcript / events 分页上限（契约 §4.2）。 */
@@ -92,7 +100,7 @@ export const ERROR_STATUS = Object.freeze({
 export const V2_CAPABILITIES = Object.freeze([
   'tasks', 'events', 'pairing', 'workspaces', 'cancel',
   'sessions', 'session.transcript', 'session.events', 'session.turns', 'session.abort', 'session.stream',
-  'workspace.files', 'workspace.file', 'workspace.changes', 'workspace.diff', 'workspace.search',
+  'workspace.files', 'workspace.file', 'workspace.image', 'workspace.changes', 'workspace.diff', 'workspace.search',
   'relay', 'relay.pairing', 'task.access',
   'approvals', 'approvals.answer',
   // 「电脑端自己发起的轮次也能实时推到手机」—— `lib/desktop-watch.mjs` 的实时中继。
@@ -110,6 +118,8 @@ export const V2_CAPABILITIES = Object.freeze([
   // 必须能先问清"这个网关到底支不支持选模型"，否则老网关会把 `model` 静默丢掉
   // （旧版只记录不转发），用户看到的是"选了但用的是别的模型"这种最难查的现象。
   'models', 'task.model',
+  // v2.11.0：电脑端工作区同步（`workspace.json`）与对话内改权限（`/permission` 命令）。
+  'workspaces.desktopSync', 'session.permission',
 ]);
 
 /** 设备 ID 必须是**小写** UUID（契约 v1.1 A2-3）。 */
@@ -353,6 +363,8 @@ function routeOfV2(rest) {
     // v2.9.0 新增：轮次索引（§4.2.2）。注意它与 `turns` **只差一个后缀**，
     // 是并列的两条路由：`turns` 是发一轮（POST），`turn-index` 是读索引（GET）。
     if (rest[2] === 'turn-index') return { name: 'sessionTurnIndex', id };
+    // v2.11.0：对话内修改电脑端会话权限（POST；GET 仍从 sessionDetail/list 的 `permission` 字段读）。
+    if (rest[2] === 'permission') return { name: 'sessionPermission', id };
   }
   return { name: 'unknown' };
 }
@@ -432,6 +444,8 @@ const ROUTE_METHODS = Object.freeze({
   sessionTurns: ['POST'],
   sessionAbort: ['POST'],
   sessionTurnIndex: ['GET'],
+  // v2.11.0：电脑端会话权限修改。只有 POST；读走列表/详情的 `permission` 字段。
+  sessionPermission: ['POST'],
   // v2.9.0：附件对象库。**只允许 GET**，且**不在** PUBLIC_ROUTES 里 ——
   // 与 sessions/workspaces 同档：内容哈希只能由"读到过会话记录的人"得知，
   // 而能读到会话记录的只可能是已配对设备（见 handler 内的安全注释）。
@@ -531,6 +545,8 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
             dshHome: config.desktop?.dshHome ?? null,
             port: config.desktop?.port ?? DEFAULT_DESKTOP_PORT,
             host: config.desktop?.host ?? '127.0.0.1',
+            // 桌面端 0.2.0 起用 --port 0 随机端口；配置端口只是一个提示。
+            autoDiscover: config.desktop?.autoDiscover !== false,
             logger: log,
           });
   if (desktop === null) log.warn('配置已关闭桌面端驱动通道（desktop.enabled=false）：电脑端会话将保持只读');
@@ -599,6 +615,102 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
   /** 桌面端 SSE 帧的独立序号空间（`id:` 行；不与会话总线的 streamSeq 混用）。 */
   let desktopSseSeq = 0;
   const maintenance = new Set();
+
+  // ---------------------------------------------------------------------------
+  // 电脑端工作区同步（契约 §4.3）
+  //
+  // 为什么读 `workspace.json` 而不是走桌面端 RPC：桌面端 0.2.0 起监听随机端口，
+  // 而且它没运行时 RPC 根本不可达；`workspace.json` 是桌面端**权威且持久**的工作区
+  // 登记表，桌面端关掉也仍然在磁盘上。手机端要看到"电脑上有哪些工作区"，不需要
+  // 桌面端在线。
+  //
+  // 安全边界：只合并该 DSH home 里**用户自己登记过**的目录（不是扫描磁盘），
+  // 它们本来就已经被用户在电脑端授权给 DSH 使用；合并后仍走 `resolveWorkspace`
+  // 的 realpath/存在性/目录校验，不会因为"在 workspace.json 里"就绕过越界检查。
+  // ---------------------------------------------------------------------------
+  const baseWorkspaceAllowlist = [...config.workspaceAllowlist];
+  const desktopWorkspacesConfig = config.desktopWorkspaces ?? {};
+  const desktopWorkspaceHome = desktopWorkspacesConfig.enabled === false
+    ? null
+    : (desktopWorkspacesConfig.home ?? config.desktop?.dshHome ?? config.mirror?.resolvedHome ?? null);
+  const desktopWorkspaces = {
+    enabled: desktopWorkspacesConfig.enabled !== false,
+    home: desktopWorkspaceHome,
+    entries: [],
+    error: null,
+    lastRefreshAt: null,
+    refreshes: 0,
+  };
+  let workspaceRefreshPromise = null;
+
+  /** 路径去重键：Windows 大小写不敏感（与 `isWithin` 的判定口径一致）。 */
+  function workspaceKey(value) {
+    const resolved = path.resolve(String(value));
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }
+
+  /**
+   * 基础白名单 + 电脑端工作区，去重且保持"配置顺序在前、电脑端顺序在后"。
+   * @param {string[]} extraPaths
+   * @returns {string[]}
+   */
+  function mergeWorkspaceAllowlist(extraPaths) {
+    const out = [];
+    const seen = new Set();
+    for (const entry of [...baseWorkspaceAllowlist, ...extraPaths]) {
+      if (typeof entry !== 'string' || !entry.trim()) continue;
+      const resolved = path.resolve(entry.trim());
+      const key = workspaceKey(resolved);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(resolved);
+    }
+    return out;
+  }
+
+  /**
+   * 重读电脑端 `workspace.json` 并更新有效白名单。
+   *
+   * 幂等、可并发调用（同一时刻只跑一次）；读不到文件按"没有电脑端工作区"处理，
+   * 绝不因为桌面端没登录/没启动而清掉配置里的白名单。
+   *
+   * @returns {Promise<typeof desktopWorkspaces>}
+   */
+  function refreshDesktopWorkspaces() {
+    if (workspaceRefreshPromise) return workspaceRefreshPromise;
+    workspaceRefreshPromise = (async () => {
+      desktopWorkspaces.refreshes += 1;
+      desktopWorkspaces.lastRefreshAt = now();
+      if (desktopWorkspaceHome === null) {
+        desktopWorkspaces.entries = [];
+        desktopWorkspaces.error = null;
+        config.workspaceAllowlist = mergeWorkspaceAllowlist([]);
+        return desktopWorkspaces;
+      }
+      try {
+        const index = await readWorkspaceIndex(desktopWorkspaceHome);
+        desktopWorkspaces.entries = index.workspaces;
+        desktopWorkspaces.error = null;
+        const before = new Set(config.workspaceAllowlist.map(workspaceKey));
+        config.workspaceAllowlist = mergeWorkspaceAllowlist(index.workspaces.map((entry) => entry.path));
+        const added = config.workspaceAllowlist.filter((entry) => !before.has(workspaceKey(entry)));
+        if (added.length > 0) {
+          log.info(`已同步 ${added.length} 个电脑端工作区：${added.join(' | ')}`);
+        }
+      } catch (err) {
+        // `readWorkspaceIndex` 对缺失/损坏文件自己返回空表；走到这里只可能是权限等意外。
+        desktopWorkspaces.error = String(err?.message ?? err);
+        log.warn(`读取电脑端工作区失败（保留配置白名单）：${desktopWorkspaces.error}`);
+      }
+      return desktopWorkspaces;
+    })().finally(() => {
+      workspaceRefreshPromise = null;
+    });
+    return workspaceRefreshPromise;
+  }
+
+  // 启动时先同步一次：手机端首次 `GET /workspaces` 就能看到电脑上的工作区。
+  await refreshDesktopWorkspaces();
 
   /** 实际监听端口（listen 后填充）；中继客户端用它拼本机回环基址。 */
   let boundPort = null;
@@ -719,7 +831,10 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
         case 'events':
           return onEvents(req, res, url);
         case 'workspaces':
-          return sendJson(res, 200, await listWorkspaces({ allowlist: config.workspaceAllowlist, defaultWorkspace: config.defaultWorkspace }));
+          // **v1 冻结**：这里用配置原始白名单，不用合并了电脑端工作区的有效白名单。
+          // 已交付的 v2.10.0 手机端会拿这个列表做"任务落点"下拉；跨版本改变它的条目集合
+          // 属于 v1 语义变更（契约 §0 line 5 的向后兼容铁律）。电脑端工作区只经 v2 暴露。
+          return sendJson(res, 200, await listWorkspaces({ allowlist: baseWorkspaceAllowlist, defaultWorkspace: config.defaultWorkspace }));
         case 'devices':
           return sendJson(res, 200, { devices: devices.list() });
         case 'deviceRevoke': {
@@ -770,6 +885,8 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
           return await onAbortTurn(res, route.id);
         case 'sessionTurnIndex':
           return await onSessionTurnIndex(res, route.id, url);
+        case 'sessionPermission':
+          return await onSessionPermission(req, res, route.id, url);
         case 'attachment':
           return await onAttachment(req, res, route.id);
         case 'workspacesV2':
@@ -1019,6 +1136,22 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
         roots: (config.sessionRoots ?? []).map((r) => ({ source: r.source, home: r.home, writable: r.writable, label: r.label })),
       },
       sessionRunner: runner.stats(),
+      // 桌面端通道的实连端口：配置端口经常不是桌面端真正监听的端口（0.2.0 起随机），
+      // 排障时必须能一眼看到"配置 19387 / 实际 55941"。
+      desktop: desktop === null ? null : {
+        host: desktop.host ?? null,
+        port: desktop.port ?? null,
+        configuredPort: desktop.configuredPort ?? null,
+        autoDiscover: desktop.autoDiscover === true,
+        discovery: desktop.discovery ?? null,
+      },
+      desktopWorkspaces: {
+        enabled: desktopWorkspaces.enabled,
+        home: desktopWorkspaces.home,
+        count: desktopWorkspaces.entries.length,
+        lastRefreshAt: desktopWorkspaces.lastRefreshAt,
+        error: desktopWorkspaces.error,
+      },
       relay: relayStatusPayload(),
       // 审批桥状态：`connected:false` 时手机端要显示"暂时收不到审批"而不是静默无反应
       approvals: approvals.state(),
@@ -1254,6 +1387,17 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     }
     const host = hostRaw ?? (desktop !== null ? 'desktop' : 'gateway');
 
+    // 权限档（`access`）对两种 host 都做同一套校验；只有**显式传了**才改变电脑端会话的
+    // 权限（缺字段 = 不指定，跟随电脑端当前默认）。非法值一律 400，不静默忽略：
+    // 用户写了 `full` 却因为拼错变成"没指定"，是最危险的一种静默失败。
+    const accessProvided = body?.access !== undefined && body?.access !== null && body?.access !== '';
+    let normalizedAccess = null;
+    if (accessProvided) {
+      const validatedAccess = resolveAccess(body.access);
+      if (!validatedAccess.ok) throw new HttpError(validatedAccess.code, validatedAccess.message);
+      normalizedAccess = validatedAccess.access;
+    }
+
     let workspace = null;
     if (body?.workspace) workspace = await workspaceContext(new URL(`/?workspace=${encodeURIComponent(body.workspace)}`, 'http://localhost'));
     const title = typeof body?.title === 'string' && body.title.trim() ? body.title.trim() : null;
@@ -1296,6 +1440,27 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
       // 先登记再投递：会话此刻已经真实存在于电脑端了，哪怕首轮投递失败，
       // 用户也应该能在手机端"我的任务"里看到它并重试，而不是变成一个谁都不知道的孤儿。
       await phoneSessions.add(sessionId, { host: 'desktop', workspace, title });
+
+      // 权限档（v2.11.0）：手机端新建电脑端任务时也能直接选「仅工作区 / 全部权限」，
+      // 不再被迫切到「仅在手机上执行」。写入方式与对话内修改完全相同：让桌面端执行
+      // `/permission <preset>`，这样电脑端同一会话看到的是同一套状态。
+      //
+      // 失败**不判任务失败**（与模型切换同一条产品原则）：会话已经真实存在，
+      // 用户最需要的是「看到原因 + 能在对话里再改一次」，而不是一个孤儿会话。
+      const permissionFields = {};
+      const requestedPreset = permissionPresetFromAccess(normalizedAccess);
+      if (requestedPreset !== null) {
+        try {
+          const execution = await desktop.executeCommand(sessionId, `/permission ${requestedPreset}`);
+          permissionFields.permissionApplied = true;
+          permissionFields.permissionCommandId = execution.commandId || null;
+          log.info(`已为电脑端新会话设置权限 sessionId=${sessionId} preset=${requestedPreset}`);
+        } catch (err) {
+          permissionFields.permissionApplied = false;
+          permissionFields.permissionWarning = String(err?.message ?? err);
+          log.warn(`电脑端新会话权限设置失败（任务照常投递）sessionId=${sessionId} preset=${requestedPreset}：${permissionFields.permissionWarning}`);
+        }
+      }
 
       // 模型必须在**首轮投递之前**切好：桌面端的会话模型是"下一次组合 agent 时生效"，
       // 而首轮投递就会触发组合 —— 顺序反了这个任务会用它并不想用的模型跑完一整轮。
@@ -1347,6 +1512,15 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
         fromSeq: result.body.fromSeq,
         workspace,
         ...modelFields,
+        ...permissionFields,
+        // 只有真的生效了才回执 access/权限视图；失败时只给 permissionWarning，
+        // 否则手机会把"没切上"显示成"已按全部权限执行"。
+        ...(permissionFields.permissionApplied === true && requestedPreset !== null
+          ? {
+              ...(accessFromPermissionPreset(requestedPreset) ? { access: accessFromPermissionPreset(requestedPreset) } : {}),
+              permission: permissionView({ currentValue: requestedPreset, editable: true, source: 'desktop' }),
+            }
+          : {}),
       });
     }
 
@@ -1383,9 +1557,38 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
       turnId: result.body.turnId,
       fromSeq: result.body.fromSeq,
       access: access.access,
+      permission: permissionForSession({ source: 'gateway', access: access.access }),
       // 网关路径的"模型已生效"就是"initialize 已带上去"，不需要再问谁（SDK 没有反悔的余地）。
       ...(wantedModel ? { modelApplied: true } : {}),
     });
+  }
+
+  /**
+   * 会话的权限视图（列表/详情/修改回执共用）。
+   *
+   * - 电脑端会话：`permissions` 投影给 currentValue，editable 取决于会话是否可写
+   *   （子代理、电脑端离线 → false；手机仍能看见当前档位）；
+   * - 网关自有会话：`access` 是任务创建时定的（`workspace` / `full`），SDK 协议没有
+   *   运行中改档的入口，所以 **editable=false**，并给出 reason 让界面如实说明。
+   *
+   * @param {{source: string, writable?: boolean, access?: string|null, projection?: unknown}} input
+   * @returns {ReturnType<typeof permissionView>|null}
+   */
+  function permissionForSession({ source, writable = false, access = null, projection = null }) {
+    if (source === 'gateway' || source === 'phone') {
+      const currentValue = access === 'full' ? 'danger-full-access' : 'workspace-write';
+      return permissionView({
+        currentValue,
+        editable: false,
+        source: 'gateway',
+        // 手机任务（网关自有 SDK）的权限档在进程启动时固定，手机端没有运行中 setter。
+        reason: 'gateway_access_fixed',
+        gatewayAccess: true,
+      });
+    }
+    const currentValue = permissionPresetFromProjection(projection);
+    if (currentValue === null) return null;
+    return permissionView({ currentValue, editable: writable, source: 'desktop' });
   }
 
   /** `GET /api/v2/sessions`（契约 §4.2）。 */
@@ -1435,6 +1638,10 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
       // （`source:'computer'`），手机端的"我的任务"列表只能靠这个字段认出它们；
       // 反过来电脑端 DSH 里自己建的会话是 `desktop`。三字段各说各的事，不得互相反推。
       s.createdBy = phoneSessions.has(s.id) ? 'phone' : 'desktop';
+      // 权限视图：手机任务按登记的 access 给两档；电脑端会话稍后用桌面端投影覆盖。
+      if (s.source === 'phone') {
+        s.permission = permissionForSession({ source: 'gateway', access: phoneSessions.get(s.id)?.access ?? null });
+      }
     }
     // 用桌面端的**真实运行态**覆盖文件 mtime 推断出的 live（若桌面端可达）。
     // Windows 上没有 flock，`session/list` 的 `running` 是唯一可靠的真值来源。
@@ -1450,6 +1657,14 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
           if (entry.projections?.values?.title && !s.title) s.title = entry.projections.values.title;
           const stats = entry.projections?.values?.sessionStats;
           if (stats) s.turns = stats.turns ?? s.turns ?? null;
+          if (s.source === 'computer') {
+            const permission = permissionForSession({
+              source: 'desktop',
+              writable: s.writable === true,
+              projection: entry.projections?.values?.permissions,
+            });
+            if (permission !== null) s.permission = permission;
+          }
         }
       } catch (err) {
         // 桌面端不可达不是错误：镜像仍然可用，只是 live 退回 mtime 判据。
@@ -1478,6 +1693,12 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
             meta.projections = proj.values;
             meta.asOfSeq = proj.asOfSeq ?? null;
             if (proj.values.title && !meta.title) meta.title = proj.values.title;
+            const permission = permissionForSession({
+              source: 'desktop',
+              writable: meta.writable === true,
+              projection: proj.values.permissions,
+            });
+            if (permission !== null) meta.permission = permission;
           }
         } catch (err) {
           log.warn(`读取桌面端会话投影失败 sessionId=${id}：${err.message}`);
@@ -1500,6 +1721,9 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     }
     meta.driver = meta.source === 'computer' ? DRIVER_DESKTOP : DRIVER_GATEWAY;
     meta.createdBy = phoneSessions.has(id) ? 'phone' : 'desktop';
+    if (meta.source === 'phone') {
+      meta.permission = permissionForSession({ source: 'gateway', access: phoneSessions.get(id)?.access ?? null });
+    }
     meta.resumable = meta.writable;
     meta.liveReason = meta.live ? meta.liveReason : null;
     return sendJson(res, 200, meta);
@@ -1536,6 +1760,82 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     });
     if (!result) throw new HttpError('session_not_found', `会话不存在：${id}`);
     return sendJson(res, 200, result);
+  }
+
+  /**
+   * `POST /api/v2/sessions/{id}/permission`（契约 §7.9，v2.11.0）。
+   *
+   * 手机端在**对话里**改电脑端会话的权限档。写入路径不是网关自己改配置，而是让
+   * 桌面端执行 `/permission <preset>`：
+   * - 权限是**会话级**的（`permission/preset` / `sandbox/mode` / `approval/policy`
+   *   三个事件写进该会话日志，重启后按 replay 恢复）；
+   * - 桌面端同一会话会立即看到，手机与电脑不会各有一套状态；
+   * - 网关不需要、也不应该去猜沙箱底层实现。
+   *
+   * 只允许 `source:"computer"` 且非派生会话。网关自有 SDK 会话的权限在进程启动时
+   * 固定（`DSH_PERMISSION_MODE`），没有运行中 setter —— 这里明确 400，而不是收下
+   * 请求再假装成功。
+   *
+   * 请求：`{"preset":"read-only"|"workspace-write"|"danger-full-access"}`；
+   * 响应：`{ok, sessionId, preset, applied, verified, commandId, permission}`。
+   */
+  async function onSessionPermission(req, res, id, url) {
+    const body = await readJsonBody(req);
+    const preset = normalizePermissionPreset(body?.preset);
+    if (preset === null) {
+      throw new HttpError('bad_request', `preset 必须是以下之一：${PERMISSION_VALUES.join(' / ')}`);
+    }
+    const meta = await mirror.get(id, { workspace: url.searchParams.get('workspace') });
+    if (!meta) throw new HttpError('session_not_found', `会话不存在：${id}`);
+    if (meta.source !== 'computer') {
+      throw new HttpError('bad_request', '只有电脑端会话支持在手机端修改权限；网关自有会话的权限在创建时确定');
+    }
+    if (isDerivedSession(meta)) {
+      throw new HttpError('bad_request', '子代理会话不单独改权限；请在上层会话里继续');
+    }
+    if (desktop === null) {
+      throw new HttpError('desktop_unavailable', '网关未接入桌面端 DSH runtime，无法修改电脑端会话权限', { status: 503 });
+    }
+
+    let execution;
+    try {
+      execution = await desktop.executeCommand(id, `/permission ${preset}`);
+    } catch (err) {
+      throw new HttpError(err?.code ?? 'desktop_error', `修改电脑端会话权限失败：${err?.message ?? err}`, { status: err?.status || 502 });
+    }
+
+    // 回读投影：命令成功后以桌面端真实状态为准（可能被自定义 preset 表归一成别的值）。
+    // 回读失败不判失败：命令已经成功，只是"无法复核"，用 requested 值回执并标记 verified=false。
+    let currentValue = preset;
+    let verified = false;
+    try {
+      const projection = await desktop.projections(id);
+      const actual = permissionPresetFromProjection(projection?.values?.permissions);
+      if (actual !== null) {
+        currentValue = actual;
+        verified = actual === preset;
+      }
+    } catch (err) {
+      log.warn(`修改权限后回读桌面端投影失败 sessionId=${id}：${err?.message ?? err}`);
+    }
+    const permission = permissionView({ currentValue, editable: true, source: 'desktop' });
+    // 广播给同一会话的所有手机：另一台手机/同一台手机的另一页也能立刻更新。
+    sessionStream.emit('session.updated', {
+      sessionId: id,
+      source: 'computer',
+      permission,
+      permissionPreset: currentValue,
+    }, { sessionId: id });
+    log.info(`手机已修改电脑端会话权限 sessionId=${id} requested=${preset} actual=${currentValue} verified=${verified} commandId=${execution.commandId || '-'}`);
+    return sendJson(res, 200, {
+      ok: true,
+      sessionId: id,
+      preset: currentValue,
+      applied: verified || currentValue === preset,
+      verified,
+      commandId: execution.commandId ?? null,
+      permission,
+    });
   }
 
   /**
@@ -1971,11 +2271,44 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     return undefined;
   }
 
-  /** `GET /api/v2/workspaces`（契约 §4.3：白名单 + git 摘要）。 */
+  /**
+   * `GET /api/v2/workspaces`（契约 §4.3：白名单 + git 摘要）。
+   *
+   * 2026-10 起列表 = **配置白名单 ∪ 电脑端 `workspace.json`**。每个条目带 `source`：
+   * `desktop` = 来自电脑端登记（`title`/`workspaceId`/`sessionCount` 一并给出），
+   * `config` = 只在网关配置里。手机端据此显示电脑端标题，也便于排障时区分来源。
+   */
   async function onWorkspacesV2(res) {
+    // 列表请求是用户点开"工作区"时才发生的，顺手重读一次 workspace.json：
+    // 不必等 5s 轮询，电脑上刚建的工作区马上就能在手机上看到。
+    await refreshDesktopWorkspaces();
     const base = await listWorkspaces({ allowlist: config.workspaceAllowlist, defaultWorkspace: config.defaultWorkspace });
+    const byPath = new Map(desktopWorkspaces.entries.map((entry) => [workspaceKey(entry.path), entry]));
+    for (const workspace of base.workspaces) {
+      const synced = byPath.get(workspaceKey(workspace.path));
+      if (synced) {
+        workspace.source = 'desktop';
+        workspace.workspaceId = synced.workspaceId;
+        workspace.title = synced.title || workspace.label;
+        workspace.sessionCount = synced.sessionIds.length;
+        // 电脑端的显示标题比 basename 更贴近用户认知（允许重名/自定义），优先用它。
+        if (synced.title) workspace.label = synced.title;
+      } else {
+        workspace.source = 'config';
+      }
+    }
     const withVcs = await listWorkspacesWithVcs({ workspaces: base.workspaces, default: base.default, spawnImpl });
-    return sendJson(res, 200, { ...withVcs, mirrors: (config.sessionRoots ?? []).map((r) => ({ source: r.source, home: r.home, writable: r.writable })) });
+    return sendJson(res, 200, {
+      ...withVcs,
+      mirrors: (config.sessionRoots ?? []).map((r) => ({ source: r.source, home: r.home, writable: r.writable })),
+      desktopWorkspaces: {
+        enabled: desktopWorkspaces.enabled,
+        home: desktopWorkspaces.home,
+        count: desktopWorkspaces.entries.length,
+        lastRefreshAt: desktopWorkspaces.lastRefreshAt,
+        error: desktopWorkspaces.error,
+      },
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -2188,6 +2521,16 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
     const requestPath = url.searchParams.get('path');
     if (!requestPath) throw new HttpError('bad_request', '缺少 path 参数');
     const workspace = await workspaceContext(url);
+    if (url.searchParams.get('format') === 'image') {
+      const image = await readWorkspaceImage({ workspace, allowlist: config.workspaceAllowlist, requestPath });
+      res.writeHead(200, {
+        'Content-Type': image.mediaType,
+        'Content-Length': image.bytes.length,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      return res.end(image.bytes);
+    }
     const result = await readFileEntry({
       workspace,
       allowlist: config.workspaceAllowlist,
@@ -2425,6 +2768,14 @@ export async function createGateway(config, { logger = null, spawnImpl = null, n
       const reaper = setInterval(() => void runner.reapIdle().catch(() => {}), Math.max(30_000, Math.floor(config.dsh.runtimeIdleMs / 2)));
       reaper.unref?.();
       maintenance.add(reaper);
+    }
+    // 电脑端工作区轮询：桌面端新建工作区后，手机端最多 pollMs 后看到。
+    if (desktopWorkspaceHome !== null) {
+      const workspacePoller = setInterval(() => {
+        void refreshDesktopWorkspaces().catch((err) => log.warn(`电脑端工作区同步失败：${String(err?.message ?? err)}`));
+      }, desktopWorkspacesConfig.pollMs);
+      workspacePoller.unref?.();
+      maintenance.add(workspacePoller);
     }
     if (config.relay?.enabled && config.relay?.url) {
       log.info(`relay.enabled=true，尝试连接中继 ${config.relay.url}`);

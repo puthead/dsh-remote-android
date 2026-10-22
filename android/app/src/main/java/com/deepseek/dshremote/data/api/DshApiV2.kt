@@ -6,6 +6,7 @@ import com.deepseek.dshremote.data.relay.RelayException
 import com.deepseek.dshremote.data.relay.TunnelEvent
 import com.deepseek.dshremote.data.relay.TunnelHttp
 import java.net.URLEncoder
+import org.json.JSONObject
 import java.util.Base64
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
@@ -357,10 +358,17 @@ class DshApiV2(
      * 失败抛 [ApiException]：`not_found`（对象库没有这张图，通常是电脑端清理过）、
      * `bad_request`（id 形状不对）、`attachment_too_large`（超过网关上限 8 MiB）。
      */
-    suspend fun fetchAttachment(id: String): ByteArray {
+    suspend fun fetchWorkspaceImage(path: String, workspace: String?): ByteArray = fetchImageBytes(
+        "/api/v2/workspaces/file" + query("workspace" to workspace, "path" to path, "format" to "image"),
+    )
+
+    suspend fun fetchAttachment(id: String): ByteArray =
+        fetchImageBytes("/api/v2/attachments/${encodePath(id)}")
+
+    private suspend fun fetchImageBytes(path: String): ByteArray {
         val response = tunnel.execute(
             method = "GET",
-            path = "/api/v2/attachments/${encodePath(id)}",
+            path = path,
             headers = mapOf("Accept" to "*/*"),
             timeoutMs = attachmentTimeoutMs,
         )
@@ -371,6 +379,9 @@ class DshApiV2(
                 fallbackMessage = "图片下载失败 HTTP ${response.status}",
             )
         }
+        if (path.startsWith("/api/v2/workspaces/file") &&
+            response.headers.entries.none { it.key.equals("Content-Type", true) && it.value.startsWith("image/", true) }
+        ) throw IllegalStateException("电脑端网关尚未支持图片预览，请更新并重启网关")
         return response.body
     }
 
@@ -384,6 +395,27 @@ class DshApiV2(
      */
     suspend fun turnIndex(sessionId: String): TurnIndex =
         JsonV2.parseTurnIndex(get("/api/v2/sessions/${encodePath(sessionId)}/turn-index"))
+
+    /**
+     * 改电脑端会话权限（契约 §7.9，v2.11.0）。
+     *
+     * 请求 `{"preset":"read-only"|"workspace-write"|"danger-full-access"}`；
+     * 成功响应带最新 `permission` 视图，调用方直接用它覆盖本地状态即可，不必再拉列表。
+     *
+     * 老网关没有这个端点 → 404（`ApiException`），由 ViewModel 翻译成"该网关不支持"。
+     */
+    suspend fun setSessionPermission(sessionId: String, preset: String): SessionPermission {
+        val body = JSONObject().put("preset", preset).toString()
+        val obj = runCatching {
+            JSONObject(post("/api/v2/sessions/${encodePath(sessionId)}/permission", body))
+        }.getOrElse { JSONObject() }
+        return JsonV2.parseSessionPermission(obj.optJSONObject("permission"))
+            ?: SessionPermission(
+                currentValue = obj.optString("preset", preset),
+                editable = true,
+                source = SessionPermission.SOURCE_DESKTOP,
+            )
+    }
 
     // ---------- 内部 ----------
 
